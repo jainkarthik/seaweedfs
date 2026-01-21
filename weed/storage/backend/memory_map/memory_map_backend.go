@@ -57,6 +57,14 @@ func (mmf *MemoryMappedFile) Name() string {
 	return mmf.mm.File.Name()
 }
 
+func (mmf *MemoryMappedFile) GetFile() *os.File {
+	return mmf.mm.File
+}
+
+func (mmf *MemoryMappedFile) Write(p []byte) (n int, err error) {
+	return mmf.WriteAt(p, -1) // append
+}
+
 func (mm *MemoryMappedFile) Sync() error {
 	return nil
 }

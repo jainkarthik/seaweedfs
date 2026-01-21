@@ -23,7 +23,7 @@ type DiskFile struct {
 	modTime      time.Time
 }
 
-func NewDiskFile(f *os.File) *DiskFile {
+func NewDiskFile(f *os.File) BackendStorageFile {
 	stat, err := f.Stat()
 	if err != nil {
 		glog.Fatalf("stat file %s: %v", f.Name(), err)
@@ -33,12 +33,20 @@ func NewDiskFile(f *os.File) *DiskFile {
 		offset = offset + (NeedlePaddingSize - offset%NeedlePaddingSize)
 	}
 
-	return &DiskFile{
+	diskFile := &DiskFile{
 		fullFilePath: f.Name(),
 		File:         f,
 		fileSize:     offset,
 		modTime:      stat.ModTime(),
 	}
+
+	// Check if we should use fake writes for this file
+	config := GetFakeWriteConfig()
+	if config.Enabled && shouldFakeWriteForFile(diskFile.Name(), config) {
+		return NewFakeDiskFile(diskFile)
+	}
+
+	return diskFile
 }
 
 func (df *DiskFile) ReadAt(p []byte, off int64) (n int, err error) {
@@ -69,6 +77,11 @@ func (df *DiskFile) WriteAt(p []byte, off int64) (n int, err error) {
 
 func (df *DiskFile) Write(p []byte) (n int, err error) {
 	return df.WriteAt(p, df.fileSize)
+}
+
+// Add File field access for compatibility
+func (df *DiskFile) GetFile() *os.File {
+	return df.File
 }
 
 func (df *DiskFile) Truncate(off int64) error {

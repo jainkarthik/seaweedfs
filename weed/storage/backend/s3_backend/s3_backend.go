@@ -203,3 +203,11 @@ func (s3backendStorageFile S3BackendStorageFile) Name() string {
 func (s3backendStorageFile S3BackendStorageFile) Sync() error {
 	return nil
 }
+
+func (s3backendStorageFile S3BackendStorageFile) Write(p []byte) (n int, err error) {
+	return s3backendStorageFile.WriteAt(p, -1) // append
+}
+
+func (s3backendStorageFile S3BackendStorageFile) GetFile() *os.File {
+	return nil // S3 backend doesn't have a local file
+}

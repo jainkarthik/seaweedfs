@@ -15,11 +15,13 @@ import (
 type BackendStorageFile interface {
 	io.ReaderAt
 	io.WriterAt
+	Write(p []byte) (n int, err error)
 	Truncate(off int64) error
 	io.Closer
 	GetStat() (datSize int64, modTime time.Time, err error)
 	Name() string
 	Sync() error
+	GetFile() *os.File
 }
 
 type BackendStorage interface {
