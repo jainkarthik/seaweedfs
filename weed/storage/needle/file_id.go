@@ -73,6 +73,7 @@ func formatNeedleIdCookie(key NeedleId, cookie Cookie) string {
 
 // copied from operation/delete_content.go, to cut off cycle dependency
 func splitVolumeId(fid string) (vid string, key_cookie string, err error) {
+	fmt.Printf("KJ_TRACE:  weed::storage::needle::file_id::splitVolumeId()\n")
 	commaIndex := strings.Index(fid, ",")
 	if commaIndex <= 0 {
 		return "", "", fmt.Errorf("wrong fid format")

@@ -2,6 +2,7 @@ package needle
 
 import (
 	"errors"
+	"fmt"
 
 	"github.com/seaweedfs/seaweedfs/weed/stats"
 	. "github.com/seaweedfs/seaweedfs/weed/storage/types"
@@ -9,7 +10,7 @@ import (
 )
 
 func (n *Needle) readNeedleTail(needleBody []byte, version Version) error {
-
+	fmt.Printf("KJ_TRACE:  weed::storage::needle::needle_read_tail::readNeedleTail()\n")
 	// for all versions, we need to read the checksum
 	if len(n.Data) > 0 {
 		expectedChecksum := CRC(util.BytesToUint32(needleBody[0:NeedleChecksumSize]))
@@ -35,6 +36,7 @@ func (n *Needle) readNeedleTail(needleBody []byte, version Version) error {
 }
 
 func PaddingLength(needleSize Size, version Version) Size {
+	fmt.Printf("KJ_TRACE:  weed::storage::needle::needle_read_tail::PaddingLength()\n")
 	if version == Version3 {
 		// this is same value as version2, but just listed here for clarity
 		return NeedlePaddingSize - ((NeedleHeaderSize + needleSize + NeedleChecksumSize + TimestampSize) % NeedlePaddingSize)

@@ -26,6 +26,7 @@ type S3BackendFactory struct {
 }
 
 func (factory *S3BackendFactory) StorageType() backend.StorageType {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::s3_backend::s3_backend::StorageType()\n")
 	return backend.StorageType("s3")
 }
 func (factory *S3BackendFactory) BuildStorage(configuration backend.StringProperties, configPrefix string, id string) (backend.BackendStorage, error) {
@@ -45,6 +46,7 @@ type S3BackendStorage struct {
 }
 
 func newS3BackendStorage(configuration backend.StringProperties, configPrefix string, id string) (s *S3BackendStorage, err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::s3_backend::s3_backend::newS3BackendStorage()\n")
 	s = &S3BackendStorage{}
 	s.id = id
 	s.aws_access_key_id = configuration.GetString(configPrefix + "aws_access_key_id")
@@ -65,6 +67,7 @@ func newS3BackendStorage(configuration backend.StringProperties, configPrefix st
 }
 
 func (s *S3BackendStorage) ToProperties() map[string]string {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::s3_backend::s3_backend::ToProperties()\n")
 	m := make(map[string]string)
 	m["aws_access_key_id"] = s.aws_access_key_id
 	m["aws_secret_access_key"] = s.aws_secret_access_key
@@ -77,6 +80,7 @@ func (s *S3BackendStorage) ToProperties() map[string]string {
 }
 
 func (s *S3BackendStorage) NewStorageFile(key string, tierInfo *volume_server_pb.VolumeInfo) backend.BackendStorageFile {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::s3_backend::s3_backend::NewStorageFile()\n")
 	if strings.HasPrefix(key, "/") {
 		key = key[1:]
 	}
@@ -91,6 +95,7 @@ func (s *S3BackendStorage) NewStorageFile(key string, tierInfo *volume_server_pb
 }
 
 func (s *S3BackendStorage) CopyFile(f *os.File, fn func(progressed int64, percentage float32) error) (key string, size int64, err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::s3_backend::s3_backend::CopyFile()\n")
 	randomUuid, _ := uuid.NewRandom()
 	key = randomUuid.String()
 
@@ -105,6 +110,7 @@ func (s *S3BackendStorage) CopyFile(f *os.File, fn func(progressed int64, percen
 }
 
 func (s *S3BackendStorage) DownloadFile(fileName string, key string, fn func(progressed int64, percentage float32) error) (size int64, err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::s3_backend::s3_backend::DownloadFile()\n")
 
 	glog.V(1).Infof("download dat file of %s from remote s3.%s as %s", fileName, s.id, key)
 
@@ -114,7 +120,7 @@ func (s *S3BackendStorage) DownloadFile(fileName string, key string, fn func(pro
 }
 
 func (s *S3BackendStorage) DeleteFile(key string) (err error) {
-
+	fmt.Printf("KJ_TRACE: weed::storage::backend::s3_backend::s3_backend::DeleteFile()\n")
 	glog.V(1).Infof("delete dat file %s from remote", key)
 
 	err = deleteFromS3(s.conn, s.bucket, key)
@@ -129,6 +135,7 @@ type S3BackendStorageFile struct {
 }
 
 func (s3backendStorageFile S3BackendStorageFile) ReadAt(p []byte, off int64) (n int, err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::s3_backend::s3_backend::ReadAt()\n")
 	datSize, _, _ := s3backendStorageFile.GetStat()
 
 	if datSize > 0 && off >= datSize {
@@ -170,18 +177,22 @@ func (s3backendStorageFile S3BackendStorageFile) ReadAt(p []byte, off int64) (n 
 }
 
 func (s3backendStorageFile S3BackendStorageFile) WriteAt(p []byte, off int64) (n int, err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::s3_backend::s3_backend::WriteAt()\n")
 	panic("not implemented")
 }
 
 func (s3backendStorageFile S3BackendStorageFile) Truncate(off int64) error {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::s3_backend::s3_backend::Truncate()\n")
 	panic("not implemented")
 }
 
 func (s3backendStorageFile S3BackendStorageFile) Close() error {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::s3_backend::s3_backend::Close()\n")
 	return nil
 }
 
 func (s3backendStorageFile S3BackendStorageFile) GetStat() (datSize int64, modTime time.Time, err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::s3_backend::s3_backend::GetStat()\n")
 
 	files := s3backendStorageFile.tierInfo.GetFiles()
 
@@ -197,9 +208,11 @@ func (s3backendStorageFile S3BackendStorageFile) GetStat() (datSize int64, modTi
 }
 
 func (s3backendStorageFile S3BackendStorageFile) Name() string {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::s3_backend::s3_backend::Name()\n")
 	return s3backendStorageFile.key
 }
 
 func (s3backendStorageFile S3BackendStorageFile) Sync() error {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::s3_backend::s3_backend::Sync()\n")
 	return nil
 }

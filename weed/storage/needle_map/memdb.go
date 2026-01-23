@@ -21,6 +21,7 @@ type MemDb struct {
 }
 
 func NewMemDb() *MemDb {
+	fmt.Printf("KJ_TRACE: weed::storage::needle_map::memdb::NewMemDb()\n")
 	opts := &opt.Options{}
 
 	var err error
@@ -34,7 +35,7 @@ func NewMemDb() *MemDb {
 }
 
 func (cm *MemDb) Set(key NeedleId, offset Offset, size Size) error {
-
+	fmt.Printf("KJ_TRACE: weed::storage::needle_map::memdb::Set()\n")
 	bytes := ToBytes(key, offset, size)
 
 	if err := cm.db.Put(bytes[0:NeedleIdSize], bytes[NeedleIdSize:NeedleIdSize+OffsetSize+SizeSize], nil); err != nil {
@@ -44,12 +45,14 @@ func (cm *MemDb) Set(key NeedleId, offset Offset, size Size) error {
 }
 
 func (cm *MemDb) Delete(key NeedleId) error {
+	fmt.Printf("KJ_TRACE: weed::storage::needle_map::memdb::Delete()\n")
 	bytes := make([]byte, NeedleIdSize)
 	NeedleIdToBytes(bytes, key)
 	return cm.db.Delete(bytes, nil)
 
 }
 func (cm *MemDb) Get(key NeedleId) (*NeedleValue, bool) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle_map::memdb::Get()\n")
 	bytes := make([]byte, NeedleIdSize)
 	NeedleIdToBytes(bytes[0:NeedleIdSize], key)
 	data, err := cm.db.Get(bytes, nil)
@@ -63,6 +66,7 @@ func (cm *MemDb) Get(key NeedleId) (*NeedleValue, bool) {
 
 // Visit visits all entries or stop if any error when visiting
 func doVisit(iter iterator.Iterator, visit func(NeedleValue) error) (ret error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle_map::memdb::doVisit()\n")
 	key := BytesToNeedleId(iter.Key())
 	data := iter.Value()
 	offset := BytesToOffset(data[0:OffsetSize])
@@ -77,6 +81,7 @@ func doVisit(iter iterator.Iterator, visit func(NeedleValue) error) (ret error) 
 }
 
 func (cm *MemDb) AscendingVisit(visit func(NeedleValue) error) (ret error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle_map::memdb::AscendingVisit()\n")
 	iter := cm.db.NewIterator(nil, nil)
 	if iter.First() {
 		if ret = doVisit(iter, visit); ret != nil {
@@ -95,6 +100,7 @@ func (cm *MemDb) AscendingVisit(visit func(NeedleValue) error) (ret error) {
 }
 
 func (cm *MemDb) DescendingVisit(visit func(NeedleValue) error) (ret error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle_map::memdb::DescendingVisit()\n")
 	iter := cm.db.NewIterator(nil, nil)
 	if iter.Last() {
 		if ret = doVisit(iter, visit); ret != nil {
@@ -113,6 +119,7 @@ func (cm *MemDb) DescendingVisit(visit func(NeedleValue) error) (ret error) {
 }
 
 func (cm *MemDb) SaveToIdx(idxName string) (ret error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle_map::memdb::SaveToIdx()\n")
 	idxFile, err := os.OpenFile(idxName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
 	if err != nil {
 		return
@@ -133,6 +140,7 @@ func (cm *MemDb) SaveToIdx(idxName string) (ret error) {
 }
 
 func (cm *MemDb) LoadFromIdx(idxName string) (ret error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle_map::memdb::LoadFromIdx()\n")
 	idxFile, err := os.OpenFile(idxName, os.O_RDONLY, 0644)
 	if err != nil {
 		return
@@ -144,11 +152,12 @@ func (cm *MemDb) LoadFromIdx(idxName string) (ret error) {
 }
 
 func (cm *MemDb) LoadFromReaderAt(readerAt io.ReaderAt) (ret error) {
-
+	fmt.Printf("KJ_TRACE: weed::storage::needle_map::memdb::LoadFromReaderAt()\n")
 	return cm.LoadFilterFromReaderAt(readerAt, true, true)
 }
 
 func (cm *MemDb) LoadFilterFromReaderAt(readerAt io.ReaderAt, isFilterOffsetZero bool, isFilterDeleted bool) (ret error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle_map::memdb::LoadFilterFromReaderAt()\n")
 	return idx.WalkIndexFile(readerAt, 0, func(key NeedleId, offset Offset, size Size) error {
 		if (isFilterOffsetZero && offset.IsZero()) || (isFilterDeleted && size.IsDeleted()) {
 			return cm.Delete(key)

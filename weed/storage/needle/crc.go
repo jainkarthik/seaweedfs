@@ -14,26 +14,30 @@ var table = crc32.MakeTable(crc32.Castagnoli)
 type CRC uint32
 
 func NewCRC(b []byte) CRC {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::crc::NewCRC()\n")
 	return CRC(0).Update(b)
 }
 
 func (c CRC) Update(b []byte) CRC {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::crc::Update()\n")
 	return CRC(crc32.Update(uint32(c), table, b))
 }
 
 // Value Deprecated. Just use the raw uint32 value to compare.
 func (c CRC) Value() uint32 {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::crc::Value()\n")
 	return uint32(c>>15|c<<17) + 0xa282ead8
 }
 
 func (n *Needle) Etag() string {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::crc::Etag()\n")
 	bits := make([]byte, 4)
 	util.Uint32toBytes(bits, uint32(n.Checksum))
 	return fmt.Sprintf("%x", bits)
 }
 
 func NewCRCwriter(w io.Writer) *CRCwriter {
-
+	fmt.Printf("KJ_TRACE: weed::storage::needle::crc::NewCRCwriter()\n")
 	return &CRCwriter{
 		crc: CRC(0),
 		w:   w,
@@ -47,9 +51,13 @@ type CRCwriter struct {
 }
 
 func (c *CRCwriter) Write(p []byte) (n int, err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::crc::Write()\n")
 	n, err = c.w.Write(p) // with each write ...
 	c.crc = c.crc.Update(p)
 	return
 }
 
-func (c *CRCwriter) Sum() uint32 { return uint32(c.crc) } // final hash
+func (c *CRCwriter) Sum() uint32 {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::crc::Sum()\n")
+	return uint32(c.crc)
+} // final hash

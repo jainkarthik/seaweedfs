@@ -13,6 +13,7 @@ import (
 )
 
 func (n *Needle) LegacyPrepareWriteBuffer(version Version, writeBytes *bytes.Buffer) (Size, int64, error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::meedle_write_legacy::LegacyPrepareWriteBuffer()\n")
 	writeBytes.Reset()
 	switch version {
 	case Version1:

@@ -2,12 +2,14 @@ package needle
 
 import (
 	"bytes"
+	"fmt"
 
 	. "github.com/seaweedfs/seaweedfs/weed/storage/types"
 	"github.com/seaweedfs/seaweedfs/weed/util"
 )
 
 func writeNeedleV3(n *Needle, offset uint64, bytesBuffer *bytes.Buffer) (size Size, actualSize int64, err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::meedle_write_version::writeNeedleByVersion()\n")
 	return writeNeedleCommon(n, offset, bytesBuffer, Version3, func(n *Needle, header []byte, bytesBuffer *bytes.Buffer, padding int) {
 		util.Uint32toBytes(header[0:NeedleChecksumSize], uint32(n.Checksum))
 		util.Uint64toBytes(header[NeedleChecksumSize:NeedleChecksumSize+TimestampSize], n.AppendAtNs)

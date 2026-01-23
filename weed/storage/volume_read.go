@@ -19,6 +19,7 @@ const PagedReadLimit = 1024 * 1024
 
 // read fills in Needle content by looking up n.Id from NeedleMapper
 func (v *Volume) readNeedle(n *needle.Needle, readOption *ReadOption, onReadSizeFn func(size Size)) (count int, err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::volume_read::readNeedle()\n")
 	v.dataFileAccessLock.RLock()
 	defer v.dataFileAccessLock.RUnlock()
 
@@ -81,6 +82,7 @@ func (v *Volume) readNeedle(n *needle.Needle, readOption *ReadOption, onReadSize
 
 // read needle at a specific offset
 func (v *Volume) readNeedleMetaAt(n *needle.Needle, offset int64, size int32) (err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::volume_read::readNeedleMetaAt()\n")
 	v.dataFileAccessLock.RLock()
 	defer v.dataFileAccessLock.RUnlock()
 	// read deleted needle meta data
@@ -99,7 +101,7 @@ func (v *Volume) readNeedleMetaAt(n *needle.Needle, offset int64, size int32) (e
 
 // read fills in Needle content by looking up n.Id from NeedleMapper
 func (v *Volume) readNeedleDataInto(n *needle.Needle, readOption *ReadOption, writer io.Writer, offset int64, size int64) (err error) {
-
+	fmt.Printf("KJ_TRACE: weed::storage::volume_read::readNeedleDataInto()\n")
 	if !readOption.HasSlowRead {
 		v.dataFileAccessLock.RLock()
 		defer v.dataFileAccessLock.RUnlock()
@@ -202,6 +204,7 @@ func min(x, y int) int {
 
 // read fills in Needle content by looking up n.Id from NeedleMapper
 func (v *Volume) ReadNeedleBlob(offset int64, size Size) ([]byte, error) {
+	fmt.Printf("KJ_TRACE: weed::storage::volume_read::ReadNeedleBlob()\n")
 	v.dataFileAccessLock.RLock()
 	defer v.dataFileAccessLock.RUnlock()
 
@@ -217,6 +220,7 @@ type VolumeFileScanner interface {
 func ScanVolumeFile(dirname string, collection string, id needle.VolumeId,
 	needleMapKind NeedleMapKind,
 	volumeFileScanner VolumeFileScanner) (err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::volume_read::ScanVolumeFile()\n")
 	var v *Volume
 	if v, err = loadVolumeWithoutIndex(dirname, collection, id, needleMapKind, needle.GetCurrentVersion()); err != nil {
 		return fmt.Errorf("failed to load volume %d: %v", id, err)
@@ -234,6 +238,7 @@ func ScanVolumeFile(dirname string, collection string, id needle.VolumeId,
 }
 
 func ScanVolumeFileFrom(version needle.Version, datBackend backend.BackendStorageFile, offset int64, volumeFileScanner VolumeFileScanner) (err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::volume_read::ScanVolumeFileFrom()\n")
 	n, nh, rest, e := needle.ReadNeedleHeader(datBackend, version, offset)
 	if e != nil {
 		if e == io.EOF {

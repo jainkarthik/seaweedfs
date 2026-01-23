@@ -15,6 +15,7 @@ import (
 
 func downloadFromS3(sess s3iface.S3API, destFileName string, sourceBucket string, sourceKey string,
 	fn func(progressed int64, percentage float32) error) (fileSize int64, err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::s3_backend::s3_download::downloadFromS3()\n")
 
 	fileSize, err = getFileSize(sess, sourceBucket, sourceKey)
 	if err != nil {
@@ -65,6 +66,7 @@ type s3DownloadProgressedWriter struct {
 }
 
 func (w *s3DownloadProgressedWriter) WriteAt(p []byte, off int64) (int, error) {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::s3_backend::s3_download::WriteAt()\n")
 	n, err := w.fp.WriteAt(p, off)
 	if err != nil {
 		return n, err
@@ -84,6 +86,7 @@ func (w *s3DownloadProgressedWriter) WriteAt(p []byte, off int64) (int, error) {
 }
 
 func getFileSize(svc s3iface.S3API, bucket string, key string) (filesize int64, error error) {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::s3_backend::s3_download::getFileSize()\n")
 	params := &s3.HeadObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(key),

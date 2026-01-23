@@ -3,12 +3,13 @@ package needle
 import (
 	"bytes"
 	"math"
-
+	"fmt"
 	. "github.com/seaweedfs/seaweedfs/weed/storage/types"
 	"github.com/seaweedfs/seaweedfs/weed/util"
 )
 
 func writeNeedleV2(n *Needle, offset uint64, bytesBuffer *bytes.Buffer) (size Size, actualSize int64, err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle_write_v2::writeNeedleV2()\n")
 	return writeNeedleCommon(n, offset, bytesBuffer, Version2, func(n *Needle, header []byte, bytesBuffer *bytes.Buffer, padding int) {
 		util.Uint32toBytes(header[0:NeedleChecksumSize], uint32(n.Checksum))
 		bytesBuffer.Write(header[0 : NeedleChecksumSize+padding])
@@ -16,6 +17,7 @@ func writeNeedleV2(n *Needle, offset uint64, bytesBuffer *bytes.Buffer) (size Si
 }
 
 func writeNeedleCommon(n *Needle, offset uint64, bytesBuffer *bytes.Buffer, version Version, writeFooter func(n *Needle, header []byte, bytesBuffer *bytes.Buffer, padding int)) (size Size, actualSize int64, err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle_write_v2::writeNeedleCommon()\n")
 	bytesBuffer.Reset()
 	header := make([]byte, NeedleHeaderSize+TimestampSize)
 	CookieToBytes(header[0:CookieSize], n.Cookie)

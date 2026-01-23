@@ -28,16 +28,18 @@ var ErrorSizeMismatch = errors.New("size mismatch")
 var ErrorSizeInvalid = errors.New("size invalid")
 
 func (n *Needle) DiskSize(version Version) int64 {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle_read::DiskSize()\n")
 	return GetActualSize(n.Size, version)
 }
 
 func ReadNeedleBlob(r backend.BackendStorageFile, offset int64, size Size, version Version) (dataSlice []byte, err error) {
-
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle_read::ReadNeedleBlob()\n")
 	dataSize := GetActualSize(size, version)
 	dataSlice = make([]byte, int(dataSize))
 
 	var n int
 	n, err = r.ReadAt(dataSlice, offset)
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle_read::ReadNeedleBlob() - ReadAt called\n")
 	if err != nil && int64(n) == dataSize {
 		err = nil
 	}
@@ -51,6 +53,7 @@ func ReadNeedleBlob(r backend.BackendStorageFile, offset int64, size Size, versi
 
 // ReadBytes hydrates the needle from the bytes buffer, with only n.Id is set.
 func (n *Needle) ReadBytes(bytes []byte, offset int64, size Size, version Version) (err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle_read::ReadBytes()\n")
 	n.ParseNeedleHeader(bytes)
 	if n.Size != size {
 		if OffsetSize == 4 && offset < int64(MaxPossibleVolumeSize) {
@@ -78,11 +81,13 @@ func (n *Needle) ReadBytes(bytes []byte, offset int64, size Size, version Versio
 
 // ReadData hydrates the needle from the file, with only n.Id is set.
 func (n *Needle) ReadData(r backend.BackendStorageFile, offset int64, size Size, version Version) (err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle_read::ReadData()\n")
 	bytes, err := ReadNeedleBlob(r, offset, size, version)
 	if err != nil {
 		return err
 	}
 	err = n.ReadBytes(bytes, offset, size, version)
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle_read::ReadData() - ReadBytes called\n")
 	if err == ErrorSizeMismatch && OffsetSize == 4 {
 		offset = offset + int64(MaxPossibleVolumeSize)
 		bytes, err = ReadNeedleBlob(r, offset, size, version)
@@ -95,12 +100,14 @@ func (n *Needle) ReadData(r backend.BackendStorageFile, offset int64, size Size,
 }
 
 func (n *Needle) ParseNeedleHeader(bytes []byte) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle_read::ParseNeedleHeader()\n")
 	n.Cookie = BytesToCookie(bytes[0:CookieSize])
 	n.Id = BytesToNeedleId(bytes[CookieSize : CookieSize+NeedleIdSize])
 	n.Size = BytesToSize(bytes[CookieSize+NeedleIdSize : NeedleHeaderSize])
 }
 
 func (n *Needle) readNeedleDataVersion2(bytes []byte) (err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle_read::ParseNeedleHeader()\n")
 	index, lenBytes := 0, len(bytes)
 	if index < lenBytes {
 		n.DataSize = util.BytesToUint32(bytes[index : index+4])
@@ -116,6 +123,7 @@ func (n *Needle) readNeedleDataVersion2(bytes []byte) (err error) {
 	return
 }
 func (n *Needle) readNeedleDataVersion2NonData(bytes []byte) (index int, err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle_read::readNeedleDataVersion2NonData()\n")
 	lenBytes := len(bytes)
 	if index < lenBytes {
 		n.Flags = bytes[index]
@@ -176,12 +184,14 @@ func (n *Needle) readNeedleDataVersion2NonData(bytes []byte) (index int, err err
 }
 
 func ReadNeedleHeader(r backend.BackendStorageFile, version Version, offset int64) (n *Needle, bytes []byte, bodyLength int64, err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle_read::ReadNeedleHeader()\n")
 	n = new(Needle)
 
 	bytes = make([]byte, NeedleHeaderSize)
 
 	var count int
 	count, err = r.ReadAt(bytes, offset)
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle_read::ReadNeedleHeader() - ReadAt called\n")
 	if err == io.EOF && count == NeedleHeaderSize {
 		err = nil
 	}
@@ -198,12 +208,13 @@ func ReadNeedleHeader(r backend.BackendStorageFile, version Version, offset int6
 // n should be a needle already read the header
 // the input stream will read until next file entry
 func (n *Needle) ReadNeedleBody(r backend.BackendStorageFile, version Version, offset int64, bodyLength int64) (bytes []byte, err error) {
-
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle_read::ReadNeedleBody()\n")
 	if bodyLength <= 0 {
 		return nil, nil
 	}
 	bytes = make([]byte, bodyLength)
 	readCount, err := r.ReadAt(bytes, offset)
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle_read::ReadNeedleBody() - ReadAt called\n")
 	if err == io.EOF && int64(readCount) == bodyLength {
 		err = nil
 	}
@@ -218,7 +229,7 @@ func (n *Needle) ReadNeedleBody(r backend.BackendStorageFile, version Version, o
 }
 
 func (n *Needle) ReadNeedleBodyBytes(needleBody []byte, version Version) (err error) {
-
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle_read::ReadNeedleBodyBytes()\n")
 	if len(needleBody) <= 0 {
 		return nil
 	}

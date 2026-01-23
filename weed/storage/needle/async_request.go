@@ -1,5 +1,9 @@
 package needle
 
+import (
+	"fmt"
+)
+
 type AsyncRequest struct {
 	N              *Needle
 	IsWriteRequest bool
@@ -30,6 +34,7 @@ func (r *AsyncRequest) WaitComplete() (uint64, uint64, bool, error) {
 }
 
 func (r *AsyncRequest) Complete(offset uint64, size uint64, isUnchanged bool, err error) {
+	fmt.Printf("KJ_TRACE:  weed::storage::needle::async_request::Complete()\n")
 	r.offset = offset
 	r.size = size
 	r.isUnchanged = isUnchanged
@@ -38,6 +43,7 @@ func (r *AsyncRequest) Complete(offset uint64, size uint64, isUnchanged bool, er
 }
 
 func (r *AsyncRequest) UpdateResult(offset uint64, size uint64, isUnchanged bool, err error) {
+	fmt.Printf("KJ_TRACE:  weed::storage::needle::async_request::UpdateResult()\n")
 	r.offset = offset
 	r.size = size
 	r.isUnchanged = isUnchanged

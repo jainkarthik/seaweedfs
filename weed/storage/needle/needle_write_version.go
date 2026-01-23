@@ -8,6 +8,7 @@ import (
 )
 
 func writeNeedleByVersion(version Version, n *Needle, offset uint64, bytesBuffer *bytes.Buffer) (size Size, actualSize int64, err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::meedle_write_version::writeNeedleByVersion()\n")
 	// Switch logic moved from needle_write.go
 	switch version {
 	case Version1:

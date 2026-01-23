@@ -19,6 +19,7 @@ var (
 )
 
 func getSession(region string) (s3iface.S3API, bool) {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::s3_backend::s3_sessions::getSession()\n")
 	sessionsLock.RLock()
 	defer sessionsLock.RUnlock()
 
@@ -27,7 +28,7 @@ func getSession(region string) (s3iface.S3API, bool) {
 }
 
 func createSession(awsAccessKeyId, awsSecretAccessKey, region, endpoint string, forcePathStyle bool) (s3iface.S3API, error) {
-
+	fmt.Printf("KJ_TRACE: weed::storage::backend::s3_backend::s3_sessions::createSession()\n")
 	sessionsLock.Lock()
 	defer sessionsLock.Unlock()
 
@@ -63,6 +64,7 @@ func createSession(awsAccessKeyId, awsSecretAccessKey, region, endpoint string, 
 }
 
 func deleteFromS3(sess s3iface.S3API, sourceBucket string, sourceKey string) (err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::s3_backend::s3_sessions::deleteFromS3()\n")
 	_, err = sess.DeleteObject(&s3.DeleteObjectInput{
 		Bucket: aws.String(sourceBucket),
 		Key:    aws.String(sourceKey),

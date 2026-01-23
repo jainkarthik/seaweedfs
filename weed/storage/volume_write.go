@@ -108,6 +108,7 @@ func (v *Volume) asyncRequestAppend(request *needle.AsyncRequest) {
 }
 
 func (v *Volume) syncWrite(n *needle.Needle, checkCookie bool) (offset uint64, size Size, isUnchanged bool, err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::volume_write::asyncRequestAppend()\n")
 	// glog.V(4).Infof("writing needle %s", needle.NewFileIdFromNeedle(v.Id, n).String())
 	v.dataFileAccessLock.Lock()
 	defer v.dataFileAccessLock.Unlock()
@@ -116,6 +117,7 @@ func (v *Volume) syncWrite(n *needle.Needle, checkCookie bool) (offset uint64, s
 }
 
 func (v *Volume) writeNeedle2(n *needle.Needle, checkCookie bool, fsync bool) (offset uint64, size Size, isUnchanged bool, err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::volume_write::writeNeedle2()\n")
 	// glog.V(4).Infof("writing needle %s", needle.NewFileIdFromNeedle(v.Id, n).String())
 	if n.Ttl == needle.EMPTY_TTL && v.Ttl != needle.EMPTY_TTL {
 		n.SetHasTtl()

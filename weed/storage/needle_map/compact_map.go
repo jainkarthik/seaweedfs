@@ -87,12 +87,14 @@ func (cs *CompactMapSegment) cap() int {
 }
 
 func (cs *CompactMapSegment) compactKey(key types.NeedleId) CompactKey {
+	fmt.Printf("KJ_TRACE: weed::storage::needle_map::compact_map::compactKey()\n")
 	return CompactKey(key - (types.NeedleId(SegmentChunkSize) * types.NeedleId(cs.chunk)))
 }
 
 // bsearchKey returns the CompactNeedleValue index for a given ID key.
 // If the key is not found, it returns the index where it should be inserted instead.
 func (cs *CompactMapSegment) bsearchKey(key types.NeedleId) (int, bool) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle_map::compact_map::bsearchKey()\n")
 	ck := cs.compactKey(key)
 
 	switch {
@@ -117,6 +119,7 @@ func (cs *CompactMapSegment) bsearchKey(key types.NeedleId) (int, bool) {
 // set inserts/updates a CompactNeedleValue.
 // If the operation is an update, returns the overwritten value's previous offset and size.
 func (cs *CompactMapSegment) set(key types.NeedleId, offset types.Offset, size types.Size) (oldOffset types.Offset, oldSize types.Size) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle_map::compact_map::set()\n")
 	i, found := cs.bsearchKey(key)
 	if found {
 		// update

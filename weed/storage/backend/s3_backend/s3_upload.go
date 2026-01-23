@@ -13,6 +13,7 @@ import (
 )
 
 func uploadToS3(sess s3iface.S3API, filename string, destBucket string, destKey string, storageClass string, fn func(progressed int64, percentage float32) error) (fileSize int64, err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::s3_backend::s3_upload::uploadToS3()\n")
 
 	//open the file
 	f, err := os.Open(filename)
@@ -76,10 +77,12 @@ type s3UploadProgressedReader struct {
 }
 
 func (r *s3UploadProgressedReader) Read(p []byte) (int, error) {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::s3_backend::s3_upload::Read()\n")
 	return r.fp.Read(p)
 }
 
 func (r *s3UploadProgressedReader) ReadAt(p []byte, off int64) (int, error) {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::s3_backend::s3_upload::ReadAt()\n")
 	n, err := r.fp.ReadAt(p, off)
 	if err != nil {
 		return n, err
@@ -105,5 +108,6 @@ func (r *s3UploadProgressedReader) ReadAt(p []byte, off int64) (int, error) {
 }
 
 func (r *s3UploadProgressedReader) Seek(offset int64, whence int) (int64, error) {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::s3_backend::s3_upload::Seek()\n")
 	return r.fp.Seek(offset, whence)
 }
