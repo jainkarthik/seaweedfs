@@ -725,6 +725,7 @@ func (s3a *S3ApiServer) registerRouter(router *mux.Router) {
 
 // loadIAMManagerFromConfig loads the advanced IAM manager from configuration file
 func loadIAMManagerFromConfig(configPath string, filerAddressProvider func() string) (*integration.IAMManager, error) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_server::loadIAMManagerFromConfig()\n")
 	// Read configuration file
 	configData, err := os.ReadFile(configPath)
 	if err != nil {

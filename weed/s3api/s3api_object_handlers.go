@@ -52,6 +52,7 @@ type countingWriter struct {
 }
 
 func (cw *countingWriter) Write(p []byte) (int, error) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::Write()\n")
 	n, err := cw.w.Write(p)
 	cw.written += int64(n)
 	return n, err
@@ -68,6 +69,8 @@ func (cw *countingWriter) Write(p []byte) (int, error) {
 //   - adjustedEnd: the adjusted absolute end offset
 //   - error: nil on success, error if the range is invalid
 func adjustRangeForPart(partStartOffset, partEndOffset int64, clientRangeHeader string) (adjustedStart, adjustedEnd int64, err error) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::adjustRangeForPart()\n")
+
 	// Validate inputs
 	if partStartOffset > partEndOffset {
 		return 0, 0, fmt.Errorf("invalid part boundaries: start %d > end %d", partStartOffset, partEndOffset)
@@ -146,6 +149,8 @@ func adjustRangeForPart(partStartOffset, partEndOffset int64, clientRangeHeader 
 //   - isRangeRequest: true if the client requested a range
 //   - err: nil on success, StreamError on failure (wraps S3 error response)
 func (s3a *S3ApiServer) parseAndValidateRange(w http.ResponseWriter, r *http.Request, entry *filer_pb.Entry, totalSize int64, bucket, object string) (offset, size int64, isRangeRequest bool, err *StreamError) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::parseAndValidateRange()\n")
+
 	rangeHeader := r.Header.Get("Range")
 	if rangeHeader == "" || !strings.HasPrefix(rangeHeader, "bytes=") {
 		return 0, totalSize, false, nil
@@ -238,24 +243,34 @@ type StreamError struct {
 }
 
 func (e *StreamError) Error() string {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::Error()\n")
+
 	return e.Err.Error()
 }
 
 func (e *StreamError) Unwrap() error {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::Unwrap()\n")
+
 	return e.Err
 }
 
 // newStreamError creates a StreamError for cases where response hasn't been written yet
 func newStreamError(err error) *StreamError {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::newStreamError()\n")
+
 	return &StreamError{Err: err, ResponseWritten: false}
 }
 
 // newStreamErrorWithResponse creates a StreamError for cases where response was already written
 func newStreamErrorWithResponse(err error) *StreamError {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::newStreamErrorWithResponse()\n")
+
 	return &StreamError{Err: err, ResponseWritten: true}
 }
 
 func mimeDetect(r *http.Request, dataReader io.Reader) io.ReadCloser {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::mimeDetect()\n")
+
 	mimeBuffer := make([]byte, 512)
 	size, _ := dataReader.Read(mimeBuffer)
 	if size > 0 {
@@ -266,6 +281,8 @@ func mimeDetect(r *http.Request, dataReader io.Reader) io.ReadCloser {
 }
 
 func urlEscapeObject(object string) string {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::urlEscapeObject()\n")
+
 	normalized := s3_constants.NormalizeObjectKey(object)
 	// Ensure leading slash for filer paths
 	if normalized != "" && !strings.HasPrefix(normalized, "/") {
@@ -275,6 +292,8 @@ func urlEscapeObject(object string) string {
 }
 
 func entryUrlEncode(dir string, entry string, encodingTypeUrl bool) (dirName string, entryName string, prefix string) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::entryUrlEncode()\n")
+
 	if !encodingTypeUrl {
 		return dir, entry, entry
 	}
@@ -282,6 +301,8 @@ func entryUrlEncode(dir string, entry string, encodingTypeUrl bool) (dirName str
 }
 
 func urlPathEscape(object string) string {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::urlPathEscape()\n")
+
 	var escapedParts []string
 	for _, part := range strings.Split(object, "/") {
 		escapedParts = append(escapedParts, strings.ReplaceAll(url.PathEscape(part), "+", "%2B"))
@@ -290,6 +311,8 @@ func urlPathEscape(object string) string {
 }
 
 func removeDuplicateSlashes(object string) string {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::removeDuplicateSlashes()\n")
+
 	result := strings.Builder{}
 	result.Grow(len(object))
 
@@ -330,6 +353,8 @@ func removeDuplicateSlashes(object string) string {
 //
 // Performance: ~1-5ms per call (one gRPC LIST request with Limit=1)
 func (s3a *S3ApiServer) hasChildren(bucket, prefix string) bool {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::hasChildren()\n")
+
 	// Clean up prefix: remove leading slashes
 	cleanPrefix := strings.TrimPrefix(prefix, "/")
 
@@ -371,6 +396,7 @@ func (s3a *S3ApiServer) hasChildren(bucket, prefix string) bool {
 // - isDirectoryObject: true if the request was for a directory object (ends with "/")
 // - error: any error encountered while checking
 func (s3a *S3ApiServer) checkDirectoryObject(bucket, object string) (*filer_pb.Entry, bool, error) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::checkDirectoryObject()\n")
 	if !strings.HasSuffix(object, "/") {
 		return nil, false, nil // Not a directory object
 	}
@@ -400,6 +426,7 @@ func (s3a *S3ApiServer) checkDirectoryObject(bucket, object string) (*filer_pb.E
 
 // serveDirectoryContent serves the content of a directory object directly
 func (s3a *S3ApiServer) serveDirectoryContent(w http.ResponseWriter, r *http.Request, entry *filer_pb.Entry) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::serveDirectoryContent()\n")
 	// Defensive nil checks - entry and attributes should never be nil, but guard against it
 	if entry == nil || entry.Attributes == nil {
 		glog.Errorf("serveDirectoryContent: entry or attributes is nil")
@@ -442,6 +469,7 @@ func (s3a *S3ApiServer) serveDirectoryContent(w http.ResponseWriter, r *http.Req
 // handleDirectoryObjectRequest is a helper function that handles directory object requests
 // for both GET and HEAD operations, eliminating code duplication
 func (s3a *S3ApiServer) handleDirectoryObjectRequest(w http.ResponseWriter, r *http.Request, bucket, object, handlerName string) bool {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::handleDirectoryObjectRequest()\n")
 	// Check if this is a directory object and handle it directly
 	if dirEntry, isDirectoryObject, err := s3a.checkDirectoryObject(bucket, object); err != nil {
 		glog.Errorf("%s: error checking directory object %s/%s: %v", handlerName, bucket, object, err)
@@ -462,6 +490,7 @@ func (s3a *S3ApiServer) handleDirectoryObjectRequest(w http.ResponseWriter, r *h
 }
 
 func newListEntry(entry *filer_pb.Entry, key string, dir string, name string, bucketPrefix string, fetchOwner bool, isDirectory bool, encodingTypeUrl bool, iam AccountManager) (listEntry ListEntry) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::newListEntry()\n")
 	storageClass := "STANDARD"
 	if v, ok := entry.Extended[s3_constants.AmzStorageClass]; ok {
 		storageClass = string(v)
@@ -525,6 +554,7 @@ func newListEntry(entry *filer_pb.Entry, key string, dir string, name string, bu
 }
 
 func (s3a *S3ApiServer) toFilerPath(bucket, object string) string {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::toFilerPath()\n")
 	// Returns the raw file path - no URL escaping needed
 	// The path is used directly, not embedded in a URL
 	object = s3_constants.NormalizeObjectKey(object)
@@ -543,6 +573,7 @@ func (s3a *S3ApiServer) hasConditionalHeaders(r *http.Request) bool {
 // processConditionalHeaders checks conditional headers and writes an error response if a condition fails.
 // It returns the result of the check and a boolean indicating if the request has been handled.
 func (s3a *S3ApiServer) processConditionalHeaders(w http.ResponseWriter, r *http.Request, bucket, object, handlerName string) (ConditionalHeaderResult, bool) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::processConditionalHeaders()\n")
 	if !s3a.hasConditionalHeaders(r) {
 		return ConditionalHeaderResult{ErrorCode: s3err.ErrNone}, false
 	}
@@ -881,6 +912,7 @@ func (s3a *S3ApiServer) GetObjectHandler(w http.ResponseWriter, r *http.Request)
 // streamFromVolumeServers streams object data directly from volume servers, bypassing filer proxy
 // This eliminates the ~19ms filer proxy overhead by reading chunks directly
 func (s3a *S3ApiServer) streamFromVolumeServers(w http.ResponseWriter, r *http.Request, entry *filer_pb.Entry, sseType string, bucket, object, versionId string) error {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::streamFromVolumeServers()\n")
 	// Profiling: Track overall and stage timings
 	t0 := time.Now()
 	var (
@@ -1088,12 +1120,14 @@ var volumeServerHTTPClient = &http.Client{
 // createLookupFileIdFunction creates a reusable lookup function for resolving volume URLs
 // Uses FilerClient's vidMap cache to eliminate per-chunk gRPC overhead
 func (s3a *S3ApiServer) createLookupFileIdFunction() func(context.Context, string) ([]string, error) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::createLookupFileIdFunction()\n")
 	// Return the FilerClient's lookup function which uses the battle-tested vidMap cache
 	return s3a.filerClient.GetLookupFileIdFunction()
 }
 
 // streamFromVolumeServersWithSSE handles streaming with inline SSE decryption
 func (s3a *S3ApiServer) streamFromVolumeServersWithSSE(w http.ResponseWriter, r *http.Request, entry *filer_pb.Entry, sseType string, bucket, object, versionId string) error {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::streamFromVolumeServersWithSSE()\n")
 	// If not encrypted, use fast path without decryption
 	if sseType == "" || sseType == "None" {
 		return s3a.streamFromVolumeServers(w, r, entry, sseType, bucket, object, versionId)
@@ -1382,6 +1416,7 @@ func (s3a *S3ApiServer) streamFromVolumeServersWithSSE(w http.ResponseWriter, r 
 // This implements the filer's ViewFromChunks approach for optimal range performance
 // Returns the number of bytes written and any error
 func (s3a *S3ApiServer) streamDecryptedRangeFromChunks(ctx context.Context, w io.Writer, entry *filer_pb.Entry, offset int64, size int64, sseType string, decryptionKey interface{}) (int64, error) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::streamDecryptedRangeFromChunks()\n")
 	// Use filer's ViewFromChunks to resolve only needed chunks for the range
 	lookupFileIdFn := s3a.createLookupFileIdFunction()
 	chunkViews := filer.ViewFromChunks(ctx, lookupFileIdFn, entry.GetChunks(), offset, size)
@@ -1504,6 +1539,7 @@ func writeZeroBytes(w io.Writer, n int64) error {
 //
 // This contrasts with SSE-KMS/SSE-S3 which use: base IV + calculateIVWithOffset(ChunkOffset)
 func (s3a *S3ApiServer) decryptSSECChunkView(ctx context.Context, fileChunk *filer_pb.FileChunk, chunkView *filer.ChunkView, customerKey *SSECustomerKey) (io.Reader, error) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::decryptSSECChunkView()\n")
 	// For multipart SSE-C, each chunk has its own IV in chunk.SseMetadata
 	if fileChunk.GetSseType() == filer_pb.SSEType_SSE_C && len(fileChunk.GetSseMetadata()) > 0 {
 		ssecMetadata, err := DeserializeSSECMetadata(fileChunk.GetSseMetadata())
@@ -1576,6 +1612,7 @@ func (s3a *S3ApiServer) decryptSSECChunkView(ctx context.Context, fileChunk *fil
 //
 // This contrasts with SSE-C which uses random IVs without offset calculation.
 func (s3a *S3ApiServer) decryptSSEKMSChunkView(ctx context.Context, fileChunk *filer_pb.FileChunk, chunkView *filer.ChunkView) (io.Reader, error) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::decryptSSEKMSChunkView()\n")
 	if fileChunk.GetSseType() == filer_pb.SSEType_SSE_KMS && len(fileChunk.GetSseMetadata()) > 0 {
 		sseKMSKey, err := DeserializeSSEKMSMetadata(fileChunk.GetSseMetadata())
 		if err != nil {
@@ -1666,6 +1703,7 @@ func (s3a *S3ApiServer) decryptSSEKMSChunkView(ctx context.Context, fileChunk *f
 //   - SSE-C: Uses random IV per chunk, no offset calculation
 //   - SSE-KMS: Stores base IV, requires calculateIVWithOffset during decryption
 func (s3a *S3ApiServer) decryptSSES3ChunkView(ctx context.Context, fileChunk *filer_pb.FileChunk, chunkView *filer.ChunkView, entry *filer_pb.Entry) (io.Reader, error) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::decryptSSES3ChunkView()\n")
 	// For multipart SSE-S3, each chunk has its own IV in chunk.SseMetadata
 	if fileChunk.GetSseType() == filer_pb.SSEType_SSE_S3 && len(fileChunk.GetSseMetadata()) > 0 {
 		keyManager := GetSSES3KeyManager()
@@ -1761,6 +1799,7 @@ func (s3a *S3ApiServer) decryptSSES3ChunkView(ctx context.Context, fileChunk *fi
 
 // fetchFullChunk fetches the complete encrypted chunk from volume server
 func (s3a *S3ApiServer) fetchFullChunk(ctx context.Context, fileId string) (io.ReadCloser, error) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::fetchFullChunk()\n")
 	// Lookup the volume server URLs for this chunk
 	lookupFileIdFn := s3a.createLookupFileIdFunction()
 	urlStrings, err := lookupFileIdFn(ctx, fileId)
@@ -1801,6 +1840,7 @@ func (s3a *S3ApiServer) fetchFullChunk(ctx context.Context, fileId string) (io.R
 
 // fetchChunkViewData fetches encrypted data for a chunk view (with range)
 func (s3a *S3ApiServer) fetchChunkViewData(ctx context.Context, chunkView *filer.ChunkView) (io.ReadCloser, error) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::fetchChunkViewData()\n")
 	// Lookup the volume server URLs for this chunk
 	lookupFileIdFn := s3a.createLookupFileIdFunction()
 	urlStrings, err := lookupFileIdFn(ctx, chunkView.FileId)
@@ -1848,6 +1888,7 @@ func (s3a *S3ApiServer) fetchChunkViewData(ctx context.Context, chunkView *filer
 
 // getEncryptedStreamFromVolumes gets raw encrypted data stream from volume servers
 func (s3a *S3ApiServer) getEncryptedStreamFromVolumes(ctx context.Context, entry *filer_pb.Entry) (io.ReadCloser, error) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::getEncryptedStreamFromVolumes()\n")
 	// Handle inline content
 	if len(entry.Content) > 0 {
 		return io.NopCloser(bytes.NewReader(entry.Content)), nil
@@ -1899,6 +1940,7 @@ func (s3a *S3ApiServer) getEncryptedStreamFromVolumes(ctx context.Context, entry
 
 // addSSEResponseHeadersFromEntry adds appropriate SSE response headers based on entry metadata
 func (s3a *S3ApiServer) addSSEResponseHeadersFromEntry(w http.ResponseWriter, r *http.Request, entry *filer_pb.Entry, sseType string) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::addSSEResponseHeadersFromEntry()\n")
 	if entry == nil || entry.Extended == nil {
 		return
 	}
@@ -1931,6 +1973,7 @@ func (s3a *S3ApiServer) addSSEResponseHeadersFromEntry(w http.ResponseWriter, r 
 
 // setResponseHeaders sets all standard HTTP response headers from entry metadata
 func (s3a *S3ApiServer) setResponseHeaders(w http.ResponseWriter, r *http.Request, entry *filer_pb.Entry, totalSize int64) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::setResponseHeaders()\n")
 	// Safety check: entry must be valid
 	if entry == nil {
 		glog.Errorf("setResponseHeaders: entry is nil")
@@ -2030,6 +2073,7 @@ type simpleMasterClient struct {
 }
 
 func (s *simpleMasterClient) GetLookupFileIdFunction() wdclient.LookupFileIdFunctionType {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::GetLookupFileIdFunction()\n")
 	return s.lookupFn
 }
 
@@ -2063,6 +2107,7 @@ func (s *simpleMasterClient) GetLookupFileIdFunction() wdclient.LookupFileIdFunc
 //   - Objects that are either 0-byte files or actual directories
 //   - Objects that have at least one child (checked via hasChildren)
 func (s3a *S3ApiServer) HeadObjectHandler(w http.ResponseWriter, r *http.Request) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::HeadObjectHandler()\n")
 
 	bucket, object := s3_constants.GetBucketAndObject(r)
 	glog.V(3).Infof("HeadObjectHandler %s %s", bucket, object)
@@ -2406,6 +2451,8 @@ func writeFinalResponse(w http.ResponseWriter, proxyResponse *http.Response, bod
 // fetchObjectEntry fetches the filer entry for an object
 // Returns nil if not found (not an error), or propagates other errors
 func (s3a *S3ApiServer) fetchObjectEntry(bucket, object string) (*filer_pb.Entry, error) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::fetchObjectEntry()\n")
+
 	objectPath := fmt.Sprintf("%s/%s/%s", s3a.option.BucketsPath, bucket, object)
 	fetchedEntry, fetchErr := s3a.getEntry("", objectPath)
 	if fetchErr != nil {
@@ -2420,6 +2467,8 @@ func (s3a *S3ApiServer) fetchObjectEntry(bucket, object string) (*filer_pb.Entry
 // fetchObjectEntryRequired fetches the filer entry for an object
 // Returns an error if the object is not found or any other error occurs
 func (s3a *S3ApiServer) fetchObjectEntryRequired(bucket, object string) (*filer_pb.Entry, error) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::fetchObjectEntryRequired()\n")
+
 	objectPath := fmt.Sprintf("%s/%s/%s", s3a.option.BucketsPath, bucket, object)
 	fetchedEntry, fetchErr := s3a.getEntry("", objectPath)
 	if fetchErr != nil {
@@ -2445,6 +2494,8 @@ func copyResponseHeaders(w http.ResponseWriter, proxyResponse *http.Response, ex
 }
 
 func passThroughResponse(proxyResponse *http.Response, w http.ResponseWriter) (statusCode int, bytesTransferred int64) {
+
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_object_handlers::passThroughResponse()\n")
 	// Capture existing CORS headers that may have been set by middleware
 	capturedCORSHeaders := captureCORSHeaders(w, corsHeaders)
 

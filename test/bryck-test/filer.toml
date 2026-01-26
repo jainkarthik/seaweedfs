@@ -1,0 +1,15 @@
+[leveldb2]
+enabled = true
+dir = "/tmp/weed/filer"
+# Shard count should be a power of 2.
+# For 128 cores, 16 or 32 shards prevents lock contention.
+shards = 32
+
+[filer.options]
+# Crucial for high-concurrency gRPC between S3 and Filer
+grpc_max_streams = 2048
+
+[filer.stores]
+# Prevent data from bloating the metadata store
+save_to_filer_limit = 0
+
