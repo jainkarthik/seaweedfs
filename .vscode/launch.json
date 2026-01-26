@@ -1,0 +1,35 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug Seaweedfs in WSL",
+            "type": "go",
+            "request": "launch",
+            "mode": "exec",
+            "program": "${workspaceFolder}/test/bryck-test/weed-debug",
+            "preLaunchTask": "Build SeaweedFS",
+            "args": [
+                "server",
+                "-ip=172.31.254.28",
+                "-master.port=9333",
+                "-master.port.grpc=19333",
+                "-master.dir=/tmp/weed/master",
+                "-master.volumeSizeLimitMB=100",
+                "-master.defaultReplication=000",
+                "-dir=/tmp/weed/volume1",
+                "-volume.max=1",
+                "-filer=true",
+                "-filer.port=8888",
+                "-s3=true",
+                "-s3.port=8333",
+                "-debug",
+                "-debug.port=9321",
+                "-s3.config=${workspaceFolder}/test/bryck-test/s3.json"
+            ],
+            "env": {
+                "GO111MODULE": "on"
+            },
+            "console": "integratedTerminal"
+        }
+    ]
+}
