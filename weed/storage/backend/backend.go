@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -46,6 +47,7 @@ var (
 
 // used by master to load remote storage configurations
 func LoadConfiguration(config *util.ViperProxy) {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::backend::LoadConfiguration()\n")
 
 	StorageBackendPrefix := "storage.backend"
 
@@ -77,6 +79,7 @@ func LoadConfiguration(config *util.ViperProxy) {
 
 // used by volume server to receive remote storage configurations from master
 func LoadFromPbStorageBackends(storageBackends []*master_pb.StorageBackend) {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::backend::LoadFromPbStorageBackends()\n")
 
 	for _, storageBackend := range storageBackends {
 		backendStorageFactory, found := BackendStorageFactories[StorageType(storageBackend.Type)]
@@ -114,6 +117,7 @@ func (p *Properties) GetString(key string) string {
 }
 
 func ToPbStorageBackends() (backends []*master_pb.StorageBackend) {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::backend::ToPbStorageBackends()\n")
 	for sName, s := range BackendStorages {
 		sType, sId := BackendNameToTypeId(sName)
 		if sType == "" {
@@ -129,6 +133,7 @@ func ToPbStorageBackends() (backends []*master_pb.StorageBackend) {
 }
 
 func BackendNameToTypeId(backendName string) (backendType, backendId string) {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::backend::BackendNameToTypeId()\n")
 	parts := strings.Split(backendName, ".")
 	if len(parts) == 1 {
 		return backendName, "default"

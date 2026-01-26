@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"runtime"
@@ -24,6 +25,7 @@ type DiskFile struct {
 }
 
 func NewDiskFile(f *os.File) *DiskFile {
+	fmt.Printf("KJ_TRACE: weed::storage::backend::file_create::NewDiskFile()\n")
 	stat, err := f.Stat()
 	if err != nil {
 		glog.Fatalf("stat file %s: %v", f.Name(), err)
