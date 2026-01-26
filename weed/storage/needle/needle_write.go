@@ -12,6 +12,7 @@ import (
 )
 
 func (n *Needle) Append(w backend.BackendStorageFile, version Version) (offset uint64, size Size, actualSize int64, err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle_write::Append()\n")
 	end, _, e := w.GetStat()
 	if e != nil {
 		err = fmt.Errorf("Cannot Read Current Volume Position: %w", e)
@@ -46,7 +47,7 @@ func (n *Needle) Append(w backend.BackendStorageFile, version Version) (offset u
 }
 
 func WriteNeedleBlob(w backend.BackendStorageFile, dataSlice []byte, size Size, appendAtNs uint64, version Version) (offset uint64, err error) {
-
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle_write::WriteNeedleBlob()\n")
 	if end, _, e := w.GetStat(); e == nil {
 		defer func(w backend.BackendStorageFile, off int64) {
 			if err != nil {
@@ -86,6 +87,7 @@ func WriteNeedleBlob(w backend.BackendStorageFile, dataSlice []byte, size Size, 
 
 // prepareNeedleWrite encapsulates the common beginning logic for all versioned writeNeedle functions.
 func prepareNeedleWrite(w backend.BackendStorageFile, n *Needle) (offset uint64, bytesBuffer *bytes.Buffer, cleanup func(err error), err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle_write::prepareNeedleWrite()\n")
 	end, _, e := w.GetStat()
 	if e != nil {
 		err = fmt.Errorf("Cannot Read Current Volume Position: %w", e)

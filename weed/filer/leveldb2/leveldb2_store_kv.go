@@ -9,7 +9,7 @@ import (
 )
 
 func (store *LevelDB2Store) KvPut(ctx context.Context, key []byte, value []byte) (err error) {
-
+	fmt.Printf("KJ_TRACE: weed::filer::leveldb::leveldb2_store_kv::KvPut()\n")
 	partitionId := bucketKvKey(key, store.dbCount)
 
 	err = store.dbs[partitionId].Put(key, value, nil)

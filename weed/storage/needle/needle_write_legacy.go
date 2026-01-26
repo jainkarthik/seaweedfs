@@ -17,6 +17,7 @@ func (n *Needle) LegacyPrepareWriteBuffer(version Version, writeBytes *bytes.Buf
 	writeBytes.Reset()
 	switch version {
 	case Version1:
+		fmt.Printf("KJ_TRACE: weed::storage::needle::meedle_write_legacy::LegacyPrepareWriteBuffer()-version1\n")
 		header := make([]byte, NeedleHeaderSize)
 		CookieToBytes(header[0:CookieSize], n.Cookie)
 		NeedleIdToBytes(header[CookieSize:CookieSize+NeedleIdSize], n.Id)
@@ -31,6 +32,7 @@ func (n *Needle) LegacyPrepareWriteBuffer(version Version, writeBytes *bytes.Buf
 		writeBytes.Write(header[0 : NeedleChecksumSize+padding])
 		return size, actualSize, nil
 	case Version2, Version3:
+		fmt.Printf("KJ_TRACE: weed::storage::needle::meedle_write_legacy::LegacyPrepareWriteBuffer()-version2/3\n")
 		header := make([]byte, NeedleHeaderSize+TimestampSize) // adding timestamp to reuse it and avoid extra allocation
 		CookieToBytes(header[0:CookieSize], n.Cookie)
 		NeedleIdToBytes(header[CookieSize:CookieSize+NeedleIdSize], n.Id)
@@ -109,6 +111,7 @@ func (n *Needle) LegacyPrepareWriteBuffer(version Version, writeBytes *bytes.Buf
 }
 
 func (n *Needle) LegacyAppend(w backend.BackendStorageFile, version Version) (offset uint64, size Size, actualSize int64, err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::meedle_write_legacy::LegacyAppend()\n")
 	if end, _, e := w.GetStat(); e == nil {
 		defer func(w backend.BackendStorageFile, off int64) {
 			if err != nil {

@@ -45,11 +45,13 @@ type Needle struct {
 }
 
 func (n *Needle) String() (str string) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle::String()\n")
 	str = fmt.Sprintf("%s Size:%d, DataSize:%d, Name:%s, Mime:%s Compressed:%v", formatNeedleIdCookie(n.Id, n.Cookie), n.Size, n.DataSize, n.Name, n.Mime, n.IsCompressed())
 	return
 }
 
 func CreateNeedleFromRequest(r *http.Request, fixJpgOrientation bool, sizeLimit int64, bytesBuffer *bytes.Buffer) (n *Needle, originalSize int, contentMd5 string, e error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle::CreateNeedleFromRequest()\n")
 	n = new(Needle)
 	pu, e := ParseUpload(r, sizeLimit, bytesBuffer)
 	if e != nil {
@@ -119,6 +121,7 @@ func CreateNeedleFromRequest(r *http.Request, fixJpgOrientation bool, sizeLimit 
 	return
 }
 func (n *Needle) ParsePath(fid string) (err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle::ParsePath()\n")
 	length := len(fid)
 	if length <= CookieSize*2 {
 		return fmt.Errorf("Invalid fid: %s", fid)
@@ -143,14 +146,17 @@ func (n *Needle) ParsePath(fid string) (err error) {
 }
 
 func GetAppendAtNs(volumeLastAppendAtNs uint64) uint64 {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle::GetAppendAtNs()\n")
 	return max(uint64(time.Now().UnixNano()), volumeLastAppendAtNs+1)
 }
 
 func (n *Needle) UpdateAppendAtNs(volumeLastAppendAtNs uint64) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle::UpdateAppendAtNs()\n")
 	n.AppendAtNs = max(uint64(time.Now().UnixNano()), volumeLastAppendAtNs+1)
 }
 
 func ParseNeedleIdCookie(key_hash_string string) (NeedleId, Cookie, error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle::ParseNeedleIdCookie()\n")
 	if len(key_hash_string) <= CookieSize*2 {
 		return NeedleIdEmpty, 0, fmt.Errorf("KeyHash is too short.")
 	}
@@ -170,6 +176,7 @@ func ParseNeedleIdCookie(key_hash_string string) (NeedleId, Cookie, error) {
 }
 
 func (n *Needle) LastModifiedString() string {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle::LastModifiedString()\n")
 	return time.Unix(int64(n.LastModified), 0).Format("2006-01-02T15:04:05")
 }
 

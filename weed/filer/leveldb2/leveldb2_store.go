@@ -40,6 +40,8 @@ func (store *LevelDB2Store) Initialize(configuration weed_util.Configuration, pr
 }
 
 func (store *LevelDB2Store) initialize(dir string, dbCount int) (err error) {
+	fmt.Printf("KJ_TRACE: weed::filer::leveldb::leveldb2_store::Initialize(dir,count)\n")
+
 	glog.Infof("filer store leveldb2 dir: %s", dir)
 	os.MkdirAll(dir, 0755)
 	if err := weed_util.TestFolderWritable(dir); err != nil {

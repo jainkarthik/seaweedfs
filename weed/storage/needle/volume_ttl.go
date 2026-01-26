@@ -32,6 +32,7 @@ var EMPTY_TTL = &TTL{}
 // 7M: 7 months
 // 8y: 8 years
 func ReadTTL(ttlString string) (*TTL, error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::volume_ttl::ReadTTL()\n")
 	if ttlString == "" {
 		return EMPTY_TTL, nil
 	}

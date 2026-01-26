@@ -1,6 +1,7 @@
 package s3api
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 
@@ -13,6 +14,7 @@ import (
 // This fixes issues where chunked data with checksums would be stored incorrectly
 // when IAM is not enabled.
 func getRequestDataReader(s3a *S3ApiServer, r *http.Request) (io.ReadCloser, s3err.ErrorCode) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_put_object_helper::getRequestDataReader()\n")
 	var s3ErrCode s3err.ErrorCode
 	dataReader := r.Body
 	rAuthType := getRequestAuthType(r)

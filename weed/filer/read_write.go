@@ -3,6 +3,7 @@ package filer
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
@@ -10,6 +11,7 @@ import (
 )
 
 func ReadEntry(masterClient *wdclient.MasterClient, filerClient filer_pb.SeaweedFilerClient, dir, name string, byteBuffer *bytes.Buffer) error {
+	fmt.Printf("KJ_TRACE: weed::filer::read_write::ReadEntry()\n")
 
 	request := &filer_pb.LookupDirectoryEntryRequest{
 		Directory: dir,
@@ -29,6 +31,7 @@ func ReadEntry(masterClient *wdclient.MasterClient, filerClient filer_pb.Seaweed
 }
 
 func ReadInsideFiler(filerClient filer_pb.SeaweedFilerClient, dir, name string) (content []byte, err error) {
+	fmt.Printf("KJ_TRACE: weed::filer::read_write::ReadInsideFiler()\n")
 	request := &filer_pb.LookupDirectoryEntryRequest{
 		Directory: dir,
 		Name:      name,
@@ -42,7 +45,7 @@ func ReadInsideFiler(filerClient filer_pb.SeaweedFilerClient, dir, name string) 
 }
 
 func SaveInsideFiler(client filer_pb.SeaweedFilerClient, dir, name string, content []byte) error {
-
+	fmt.Printf("KJ_TRACE: weed::filer::read_write::SaveInsideFiler()\n")
 	resp, err := filer_pb.LookupEntry(context.Background(), client, &filer_pb.LookupDirectoryEntryRequest{
 		Directory: dir,
 		Name:      name,

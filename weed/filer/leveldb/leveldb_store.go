@@ -40,11 +40,13 @@ func (store *LevelDBStore) GetName() string {
 }
 
 func (store *LevelDBStore) Initialize(configuration weed_util.Configuration, prefix string) (err error) {
+	fmt.Printf("KJ_TRACE: weed::filer::leveldb::leveldb_store::Initialize(config,prefix)\n")
 	dir := configuration.GetString(prefix + "dir")
 	return store.initialize(dir)
 }
 
 func (store *LevelDBStore) initialize(dir string) (err error) {
+	fmt.Printf("KJ_TRACE: weed::filer::leveldb::leveldb_store::Initialize(dir)\n")
 	glog.V(0).Infof("filer store dir: %s", dir)
 	os.MkdirAll(dir, 0755)
 	if err := weed_util.TestFolderWritable(dir); err != nil {
@@ -80,6 +82,7 @@ func (store *LevelDBStore) RollbackTransaction(ctx context.Context) error {
 }
 
 func (store *LevelDBStore) InsertEntry(ctx context.Context, entry *filer.Entry) (err error) {
+	fmt.Printf("KJ_TRACE: weed::filer::leveldb::leveldb_store::InsertEntry()\n")
 	key := genKey(entry.DirAndName())
 
 	value, err := entry.EncodeAttributesAndChunks()

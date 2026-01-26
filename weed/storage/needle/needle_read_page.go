@@ -14,7 +14,7 @@ import (
 // volumeOffset: the offset within the volume
 // needleOffset: the offset within the needle Data
 func (n *Needle) ReadNeedleData(r backend.BackendStorageFile, volumeOffset int64, data []byte, needleOffset int64) (count int, err error) {
-
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle_read_page::ReadNeedleData()\n")
 	sizeToRead := min(int64(len(data)), int64(n.DataSize)-needleOffset)
 	if sizeToRead <= 0 {
 		return 0, io.EOF
@@ -35,6 +35,7 @@ func (n *Needle) ReadNeedleData(r backend.BackendStorageFile, volumeOffset int64
 
 // ReadNeedleMeta fills all metadata except the n.Data
 func (n *Needle) ReadNeedleMeta(r backend.BackendStorageFile, offset int64, size Size, version Version) (err error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle_read_page::ReadNeedleMeta()\n")
 	defer func() {
 		if r := recover(); r != nil {
 			err = fmt.Errorf("panic occurred: %+v", r)

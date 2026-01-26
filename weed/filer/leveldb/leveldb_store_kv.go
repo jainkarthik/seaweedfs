@@ -9,6 +9,7 @@ import (
 )
 
 func (store *LevelDBStore) KvPut(ctx context.Context, key []byte, value []byte) (err error) {
+	fmt.Printf("KJ_TRACE: weed::filer::leveldb::leveldb_store_kv::KvPut()\n")
 
 	err = store.db.Put(key, value, nil)
 
@@ -20,7 +21,7 @@ func (store *LevelDBStore) KvPut(ctx context.Context, key []byte, value []byte) 
 }
 
 func (store *LevelDBStore) KvGet(ctx context.Context, key []byte) (value []byte, err error) {
-
+	fmt.Printf("KJ_TRACE: weed::filer::leveldb::leveldb_store_kv::KvGet()\n")
 	value, err = store.db.Get(key, nil)
 
 	if err == leveldb.ErrNotFound {
@@ -35,7 +36,7 @@ func (store *LevelDBStore) KvGet(ctx context.Context, key []byte) (value []byte,
 }
 
 func (store *LevelDBStore) KvDelete(ctx context.Context, key []byte) (err error) {
-
+	fmt.Printf("KJ_TRACE: weed::filer::leveldb::leveldb_store_kv::KvDelete()\n")
 	err = store.db.Delete(key, nil)
 
 	if err != nil {

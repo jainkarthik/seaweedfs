@@ -16,6 +16,7 @@ type AsyncRequest struct {
 }
 
 func NewAsyncRequest(n *Needle, isWriteRequest bool) *AsyncRequest {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::async_request::NewAsyncRequest()\n")
 	return &AsyncRequest{
 		offset:         0,
 		size:           0,
@@ -30,11 +31,12 @@ func NewAsyncRequest(n *Needle, isWriteRequest bool) *AsyncRequest {
 
 func (r *AsyncRequest) WaitComplete() (uint64, uint64, bool, error) {
 	<-r.doneChan
+	fmt.Printf("KJ_TRACE: weed::storage::needle::async_request::WaitComplete()\n")
 	return r.offset, r.size, r.isUnchanged, r.err
 }
 
 func (r *AsyncRequest) Complete(offset uint64, size uint64, isUnchanged bool, err error) {
-	fmt.Printf("KJ_TRACE:  weed::storage::needle::async_request::Complete()\n")
+	fmt.Printf("KJ_TRACE: weed::storage::needle::async_request::Complete()\n")
 	r.offset = offset
 	r.size = size
 	r.isUnchanged = isUnchanged
@@ -43,7 +45,7 @@ func (r *AsyncRequest) Complete(offset uint64, size uint64, isUnchanged bool, er
 }
 
 func (r *AsyncRequest) UpdateResult(offset uint64, size uint64, isUnchanged bool, err error) {
-	fmt.Printf("KJ_TRACE:  weed::storage::needle::async_request::UpdateResult()\n")
+	fmt.Printf("KJ_TRACE: weed::storage::needle::async_request::UpdateResult()\n")
 	r.offset = offset
 	r.size = size
 	r.isUnchanged = isUnchanged
@@ -51,9 +53,11 @@ func (r *AsyncRequest) UpdateResult(offset uint64, size uint64, isUnchanged bool
 }
 
 func (r *AsyncRequest) Submit() {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::async_request::Submit()\n")
 	close(r.doneChan)
 }
 
 func (r *AsyncRequest) IsSucceed() bool {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::async_request::IsSucceed()\n")
 	return r.err == nil
 }

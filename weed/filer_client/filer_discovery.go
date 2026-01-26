@@ -36,6 +36,7 @@ type FilerDiscoveryService struct {
 
 // NewFilerDiscoveryService creates a new filer discovery service
 func NewFilerDiscoveryService(masters []pb.ServerAddress, grpcDialOption grpc.DialOption) *FilerDiscoveryService {
+	fmt.Printf("KJ_TRACE: weed::filer_client::filer_discovery::NewFilerDiscoveryService()\n")
 	return &FilerDiscoveryService{
 		masters:        masters,
 		grpcDialOption: grpcDialOption,
@@ -48,6 +49,7 @@ func NewFilerDiscoveryService(masters []pb.ServerAddress, grpcDialOption grpc.Di
 
 // discoverFilersFromMaster discovers filers from a single master
 func (fds *FilerDiscoveryService) discoverFilersFromMaster(masterAddr pb.ServerAddress) ([]pb.ServerAddress, error) {
+	fmt.Printf("KJ_TRACE: weed::filer_client::filer_discovery::discoverFilersFromMaster()\n")
 	// Convert HTTP master address to gRPC address (HTTP port + 10000)
 	grpcAddr := masterAddr.ToGrpcAddress()
 
@@ -80,6 +82,7 @@ func (fds *FilerDiscoveryService) discoverFilersFromMaster(masterAddr pb.ServerA
 
 // refreshFilers discovers filers from all masters and updates the filer list
 func (fds *FilerDiscoveryService) refreshFilers() {
+	fmt.Printf("KJ_TRACE: weed::filer_client::filer_discovery::refreshFilers()\n")
 	glog.V(2).Info("Refreshing filer list from masters")
 
 	var allFilers []pb.ServerAddress
@@ -125,6 +128,7 @@ func (fds *FilerDiscoveryService) refreshFilers() {
 
 // GetFilers returns the current list of filers
 func (fds *FilerDiscoveryService) GetFilers() []pb.ServerAddress {
+	fmt.Printf("KJ_TRACE: weed::filer_client::filer_discovery::GetFilers()\n")
 	fds.filersMutex.RLock()
 	defer fds.filersMutex.RUnlock()
 
@@ -136,6 +140,7 @@ func (fds *FilerDiscoveryService) GetFilers() []pb.ServerAddress {
 
 // Start begins the filer discovery service
 func (fds *FilerDiscoveryService) Start() error {
+	fmt.Printf("KJ_TRACE: weed::filer_client::filer_discovery::Start()\n")
 	glog.V(1).Info("Starting filer discovery service")
 
 	// Initial discovery
@@ -181,6 +186,7 @@ func (fds *FilerDiscoveryService) Start() error {
 
 // Stop stops the filer discovery service
 func (fds *FilerDiscoveryService) Stop() error {
+	fmt.Printf("KJ_TRACE: weed::filer_client::filer_discovery::Stop()\n")
 	glog.V(1).Info("Stopping filer discovery service")
 
 	close(fds.stopChan)

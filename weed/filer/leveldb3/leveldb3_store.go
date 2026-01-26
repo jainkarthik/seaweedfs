@@ -42,11 +42,13 @@ func (store *LevelDB3Store) GetName() string {
 }
 
 func (store *LevelDB3Store) Initialize(configuration weed_util.Configuration, prefix string) (err error) {
+	fmt.Printf("KJ_TRACE: weed::filer::leveldb::leveldb3_store::Initialize(config,prefix)\n")
 	dir := configuration.GetString(prefix + "dir")
 	return store.initialize(dir)
 }
 
 func (store *LevelDB3Store) initialize(dir string) (err error) {
+	fmt.Printf("KJ_TRACE: weed::filer::leveldb::leveldb3_store::Initialize(dir)\n")
 	glog.Infof("filer store leveldb3 dir: %s", dir)
 	os.MkdirAll(dir, 0755)
 	if err := weed_util.TestFolderWritable(dir); err != nil {
@@ -65,6 +67,7 @@ func (store *LevelDB3Store) initialize(dir string) (err error) {
 }
 
 func (store *LevelDB3Store) loadDB(name string) (*leveldb.DB, error) {
+	fmt.Printf("KJ_TRACE: weed::filer::leveldb::leveldb3_store::loadDB()\n")
 	bloom := filter.NewBloomFilter(8) // false positive rate 0.02
 	opts := &opt.Options{
 		BlockCacheCapacity: 32 * 1024 * 1024, // default value is 8MiB

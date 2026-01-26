@@ -78,10 +78,12 @@ type S3ApiServer struct {
 }
 
 func NewS3ApiServer(router *mux.Router, option *S3ApiServerOption) (s3ApiServer *S3ApiServer, err error) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_server::NewS3ApiServer()\n")
 	return NewS3ApiServerWithStore(router, option, "")
 }
 
 func NewS3ApiServerWithStore(router *mux.Router, option *S3ApiServerOption, explicitStore string) (s3ApiServer *S3ApiServer, err error) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_server::NewS3ApiServerWithStore()\n")
 	if len(option.Filers) == 0 {
 		return nil, fmt.Errorf("at least one filer address is required")
 	}
@@ -250,6 +252,7 @@ func NewS3ApiServerWithStore(router *mux.Router, option *S3ApiServerOption, expl
 // Uses FilerClient's tracked current filer which is updated on successful operations
 // This provides better availability than always using the first filer
 func (s3a *S3ApiServer) getFilerAddress() pb.ServerAddress {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_server::getFilerAddress()\n")
 	if s3a.filerClient != nil {
 		return s3a.filerClient.GetCurrentFiler()
 	}
@@ -265,6 +268,7 @@ func (s3a *S3ApiServer) getFilerAddress() pb.ServerAddress {
 // This helper method centralizes the logic for loading bucket policies into the engine
 // to avoid duplication and ensure consistent error handling
 func (s3a *S3ApiServer) syncBucketPolicyToEngine(bucket string, policyDoc *policy_engine.PolicyDocument) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_server::syncBucketPolicyToEngine()\n")
 	if s3a.policyEngine == nil {
 		return
 	}
@@ -287,6 +291,7 @@ func (s3a *S3ApiServer) syncBucketPolicyToEngine(bucket string, policyDoc *polic
 //   - s3err.ErrCode: ErrNone if allowed, ErrAccessDenied if denied
 //   - bool: true if policy was evaluated (has policy for bucket), false if no policy
 func (s3a *S3ApiServer) checkPolicyWithEntry(r *http.Request, bucket, object, action, principal string, objectEntry map[string][]byte) (s3err.ErrorCode, bool) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_server::checkPolicyWithEntry()\n")
 	if s3a.policyEngine == nil {
 		return s3err.ErrNone, false
 	}
@@ -339,6 +344,7 @@ func (s3a *S3ApiServer) checkPolicyWithEntry(r *http.Request, bucket, object, ac
 //
 // Returns s3err.ErrNone if allowed, or an error code if denied or on error.
 func (s3a *S3ApiServer) recheckPolicyWithObjectEntry(r *http.Request, bucket, object, action string, objectEntry map[string][]byte, handlerName string) s3err.ErrorCode {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_server::recheckPolicyWithObjectEntry()\n")
 	identityRaw := GetIdentityFromContext(r)
 	var identity *Identity
 	if identityRaw != nil {
@@ -363,6 +369,7 @@ func (s3a *S3ApiServer) recheckPolicyWithObjectEntry(r *http.Request, bucket, ob
 // then "develop.s3.example.com" is path-style (parent "s3.example.com" is in the list),
 // while "s3.example.com" is virtual-host style.
 func classifyDomainNames(domainNames []string) (pathStyleDomains, virtualHostDomains []string) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_server::classifyDomainNames()\n")
 	for _, domainName := range domainNames {
 		parts := strings.SplitN(domainName, ".", 2)
 		if len(parts) == 2 && slices.Contains(domainNames, parts[1]) {
@@ -380,6 +387,7 @@ func classifyDomainNames(domainNames []string) (pathStyleDomains, virtualHostDom
 
 // handleCORSOriginValidation handles the common CORS origin validation logic
 func (s3a *S3ApiServer) handleCORSOriginValidation(w http.ResponseWriter, r *http.Request) bool {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_server::handleCORSOriginValidation()\n")
 	origin := r.Header.Get("Origin")
 	if origin != "" {
 		if len(s3a.option.AllowedOrigins) == 0 || s3a.option.AllowedOrigins[0] == "*" {
@@ -408,6 +416,7 @@ func (s3a *S3ApiServer) handleCORSOriginValidation(w http.ResponseWriter, r *htt
 }
 
 func (s3a *S3ApiServer) registerRouter(router *mux.Router) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_server::registerRouter()\n")
 	// API Router
 	apiRouter := router.PathPrefix("/").Subrouter()
 

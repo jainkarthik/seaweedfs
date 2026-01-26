@@ -2,6 +2,7 @@ package s3api
 
 import (
 	"encoding/base64"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -26,6 +27,7 @@ type PutToFilerEncryptionResult struct {
 // calculatePartOffset calculates unique offset for each part to prevent IV reuse in multipart uploads
 // AWS S3 part numbers must start from 1, never 0 or negative
 func calculatePartOffset(partNumber int) int64 {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_put_handlers::calculatePartOffset()\n")
 	// AWS S3 part numbers must start from 1, never 0 or negative
 	if partNumber < 1 {
 		glog.Errorf("Invalid partNumber: %d. Must be >= 1.", partNumber)
@@ -39,6 +41,7 @@ func calculatePartOffset(partNumber int) int64 {
 
 // handleSSECEncryption processes SSE-C encryption for the data reader
 func (s3a *S3ApiServer) handleSSECEncryption(r *http.Request, dataReader io.Reader) (io.Reader, *SSECustomerKey, []byte, s3err.ErrorCode) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_put_handlers::handleSSECEncryption()\n")
 	// Handle SSE-C encryption if requested
 	customerKey, err := ParseSSECHeaders(r)
 	if err != nil {
@@ -64,6 +67,7 @@ func (s3a *S3ApiServer) handleSSECEncryption(r *http.Request, dataReader io.Read
 
 // handleSSEKMSEncryption processes SSE-KMS encryption for the data reader
 func (s3a *S3ApiServer) handleSSEKMSEncryption(r *http.Request, dataReader io.Reader, partOffset int64) (io.Reader, *SSEKMSKey, []byte, s3err.ErrorCode) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_put_handlers::handleSSEKMSEncryption()\n")
 	// Handle SSE-KMS encryption if requested
 	if !IsSSEKMSRequest(r) {
 		return dataReader, nil, nil, s3err.ErrNone
@@ -134,6 +138,7 @@ func (s3a *S3ApiServer) handleSSEKMSEncryption(r *http.Request, dataReader io.Re
 
 // handleSSES3MultipartEncryption handles multipart upload logic for SSE-S3 encryption
 func (s3a *S3ApiServer) handleSSES3MultipartEncryption(r *http.Request, dataReader io.Reader, partOffset int64) (io.Reader, *SSES3Key, s3err.ErrorCode) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_put_handlers::handleSSES3MultipartEncryption()\n")
 	keyDataHeader := r.Header.Get(s3_constants.SeaweedFSSSES3KeyDataHeader)
 	baseIVHeader := r.Header.Get(s3_constants.SeaweedFSSSES3BaseIVHeader)
 
@@ -178,6 +183,7 @@ func (s3a *S3ApiServer) handleSSES3MultipartEncryption(r *http.Request, dataRead
 
 // handleSSES3SinglePartEncryption handles single-part upload logic for SSE-S3 encryption
 func (s3a *S3ApiServer) handleSSES3SinglePartEncryption(dataReader io.Reader) (io.Reader, *SSES3Key, s3err.ErrorCode) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_put_handlers::handleSSES3SinglePartEncryption()\n")
 	glog.V(4).Infof("handleSSES3SinglePartEncryption: generating new key for single-part upload")
 
 	keyManager := GetSSES3KeyManager()
@@ -203,6 +209,7 @@ func (s3a *S3ApiServer) handleSSES3SinglePartEncryption(dataReader io.Reader) (i
 
 // handleSSES3Encryption processes SSE-S3 encryption for the data reader
 func (s3a *S3ApiServer) handleSSES3Encryption(r *http.Request, dataReader io.Reader, partOffset int64) (io.Reader, *SSES3Key, []byte, s3err.ErrorCode) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_put_handlers::handleSSES3Encryption()\n")
 	if !IsSSES3RequestInternal(r) {
 		return dataReader, nil, nil, s3err.ErrNone
 	}
@@ -242,6 +249,7 @@ func (s3a *S3ApiServer) handleSSES3Encryption(r *http.Request, dataReader io.Rea
 // handleAllSSEEncryption processes all SSE types in sequence and returns the final encrypted reader
 // This eliminates repetitive dataReader assignments and centralizes SSE processing
 func (s3a *S3ApiServer) handleAllSSEEncryption(r *http.Request, dataReader io.Reader, partOffset int64) (*PutToFilerEncryptionResult, s3err.ErrorCode) {
+	fmt.Printf("KJ_TRACE: weed::s3api::s3api_put_handlers::handleAllSSEEncryption()\n")
 	result := &PutToFilerEncryptionResult{
 		DataReader: dataReader,
 	}

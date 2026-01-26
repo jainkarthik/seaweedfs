@@ -34,6 +34,7 @@ type ParsedUpload struct {
 }
 
 func ParseUpload(r *http.Request, sizeLimit int64, bytesBuffer *bytes.Buffer) (pu *ParsedUpload, e error) {
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle_parse_upload::ParseUpload(pu,e)\n")
 	bytesBuffer.Reset()
 	pu = &ParsedUpload{bytesBuffer: bytesBuffer}
 	pu.PairMap = make(map[string]string)
@@ -98,7 +99,7 @@ func ParseUpload(r *http.Request, sizeLimit int64, bytesBuffer *bytes.Buffer) (p
 }
 
 func parseUpload(r *http.Request, sizeLimit int64, pu *ParsedUpload) (e error) {
-
+	fmt.Printf("KJ_TRACE: weed::storage::needle::needle_parse_upload::ParseUpload(e)\n")
 	defer func() {
 		if e != nil && r.Body != nil {
 			io.Copy(io.Discard, r.Body)
