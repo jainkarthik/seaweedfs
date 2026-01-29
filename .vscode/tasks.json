@@ -10,7 +10,7 @@
         {
             "label": "Build SeaweedFS",
             "type": "shell",
-            "command": "go build -a -gcflags='all=-N -l' -o ${workspaceFolder}/test/bryck-test/weed-debug ${workspaceFolder}/weed",
+            "command": "go build -a -v -gcflags='all=-N -l' -o ${workspaceFolder}/test/bryck-test/weed-debug ${workspaceFolder}/weed",
             "group": {
                 "kind": "build",
                 "isDefault": true

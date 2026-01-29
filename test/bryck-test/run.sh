@@ -23,15 +23,49 @@ LOG_DIR="/tmp/weed/logs"
 mkdir -p $DATA_DIR/{master,filer} $LOG_DIR $DATA_DIR/volume{1..16}
 
 sudo mkdir -p /etc/seaweedfs
-sudo cp -fv ./filer.toml /etc/seaweedfs/filer.toml
-sudo cp -fv ./s3.json /etc/seaweedfs/s3.json
+# sudo cp -fv ./filer.toml /etc/seaweedfs/filer.toml
+# sudo cp -fv ./s3.json /etc/seaweedfs/s3.json
 
-WEED_BIN=./weed-4.07-amd64
+WEED_BIN=./weed-4.07-arm64
 Ip10Gbps=10.10.10.32
 FILER_SOCK="/tmp/seaweedfs-filer-8888.sock"
 
+ulimit -n 102400
+
 echo "Starting..."
 
+## Standalone server with master, volume, filer, s3 all in one
+$WEED_BIN server \
+        -ip=10.10.10.31 \
+        -ip.bind=10.10.10.31 \
+        -master.port=9333 \
+        -master.port.grpc=19333 \
+        -master.dir=/tmp/weed/master \
+        -master.volumeSizeLimitMB=64000 \
+        -master.defaultReplication=000 \
+        -dir=/tmp/weed/volume1,/tmp/weed/volume2,/tmp/weed/volume3,/tmp/weed/volume4,/tmp/weed/volume5,/tmp/weed/volume6,/tmp/weed/volume7,/tmp/weed/volume8,/tmp/weed/volume9,/tmp/weed/volume10,/tmp/weed/volume11,/tmp/weed/volume12,/tmp/weed/volume13,/tmp/weed/volume14,/tmp/weed/volume15,/tmp/weed/volume16 \
+        -volume.max=1000 \
+        -volume.index=leveldb \
+        -volume.fileSizeLimitMB=4096 \
+        -filer=true \
+        -filer.port=8888 \
+        -s3=true \
+        -s3.port=8333 \
+        -s3.config=./s3.json \
+        -debug -debug.port=9321 \
+        > $LOG_DIR/server.log 2>&1 &
+
+
+# -master.volumeSizeLimitMB=65536 \
+#       -volume.fileWriteBufferSizeMB=2 \
+#        -ip.bind=10.10.10.32 \
+
+
+
+####################### 
+
+
+## THIS IS FOR MASTER INSTNACE ONLY
 # # $WEED_BIN -v=0 master \
 # #         -defaultReplication=000 \
 # #         -ip=$Ip10Gbps -ip.bind=$Ip10Gbps \
@@ -45,6 +79,7 @@ echo "Starting..."
 
 # echo "[1/4] Started Master"
 
+## THIS IS FOR VOLUME INSTANCE ONLY
 # # $WEED_BIN -v=0 volume \
 # #         -dir="/bryck/seaweedfs/volume" \
 # #         -index=leveldb2 \
@@ -62,6 +97,7 @@ echo "Starting..."
 
 # echo "[2/4] started volume"
 
+## THIS IS FOR FILER INSTANCE ONLY
 # # $WEED_BIN -v=0 filer \
 # #         -debug -debug.port=9327 \
 # #         -ip=$Ip10Gbps -ip.bind=$Ip10Gbps \
@@ -77,6 +113,7 @@ echo "Starting..."
 
 # echo "[3/4] started filer"
 
+## THIS IS FOR S3 INSTANCE ONLY
 # # $WEED_BIN -v=0 s3 \
 # #         -filer=$Ip10Gbps:8888 \
 # #         -ip.bind=$Ip10Gbps\
@@ -120,23 +157,3 @@ echo "Starting..."
 #   -s3.port=8333 \
 #   -s3.config=/etc/seaweedfs/s3.json
 
-
-$WEED_BIN server \
-        -ip=172.31.254.28 \
-        -master.port=9333 \
-        -master.port.grpc=19333 \
-        -master.dir=/tmp/weed/master \
-        -master.volumeSizeLimitMB=100 \
-        -master.defaultReplication=000 \
-        -dir=/tmp/weed/volume1,/tmp/weed/volume2,/tmp/weed/volume3,/tmp/weed/volume4,/tmp/weed/volume5,/tmp/weed/volume6,/tmp/weed/volume7,/tmp/weed/volume8,/tmp/weed/volume9,/tmp/weed/volume10,/tmp/weed/volume11,/tmp/weed/volume12,/tmp/weed/volume13,/tmp/weed/volume14,/tmp/weed/volume15,/tmp/weed/volume16 \
-        -volume.max=1 \
-        -filer=true \
-        -filer.port=8888 \
-        -s3=true \
-        -s3.port=8333 \
-        -s3.config=/etc/seaweedfs/s3.json \
-        > $LOG_DIR/server.log 2>&1 &
-
-
-# -master.volumeSizeLimitMB=65536 \
-#        -ip.bind=10.10.10.32 \
