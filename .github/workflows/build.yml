@@ -1,0 +1,232 @@
+name: Build, Scan, Package and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g., 4.12)'
+        required: false
+
+env:
+  GO_VERSION: '1.21'
+  DOCKER_BUILDKIT: 1
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+        fips: [false, true]
+        exclude:
+          - arch: arm64
+            fips: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Set version
+        id: version
+        run: |
+          VERSION=${VERSION:-${{ github.ref_name }}}
+          VERSION=${VERSION#v}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Build binary
+        env:
+          FIPS_ENABLED: ${{ matrix.fips }}
+        run: |
+          if [ "$FIPS_ENABLED" = "true" ]; then
+            make build-fips
+          else
+            make build-amd64
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: seaweedfs-${{ matrix.arch }}-${{ matrix.fips && 'fips' || 'standard' }}
+          path: seaweedfs-*-linux-${{ matrix.arch }}*
+          retention-days: 7
+
+  sbom:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Install syft
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Generate SBOM
+        run: |
+          for f in artifacts/**/weed-*-linux-*; do
+            if [ -f "$f" ]; then
+              name=$(basename "$f")
+              syft "$f" -o cyclonedx-json > "sbom/${name}.cdx.json"
+              syft "$f" -o spdx-json > "sbom/${name}.spdx.json"
+            fi
+          done
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom/
+
+  scan:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Run Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: .
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+
+      - name: Run Grype
+        uses: anchore/grype-action@main
+        with:
+          path: .
+          severity-cutoff: high
+          fail-only: true
+
+  package-deb:
+    needs: [build, sbom, scan]
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y dpkg-dev debhelper build-essential
+
+      - name: Build DEB
+        run: |
+          VERSION=${{ env.VERSION }}
+          mkdir -p build
+          cp artifacts/*/weed-*-linux-* build/
+          cd build
+          dpkg-buildpackage -b -uc -us
+
+      - name: Upload DEB
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-packages
+          path: *.deb
+
+  package-rpm:
+    needs: [build, sbom, scan]
+    runs-on: ubuntu-latest
+    container: rockylinux:9
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Install build dependencies
+        run: |
+          dnf install -y rpmbuild dpkg-dev
+
+      - name: Build RPM
+        run: |
+          VERSION=${{ env.VERSION }}
+          mkdir -p ~/rpmbuild/SOURCES
+          cp artifacts/*/weed-*-linux-* ~/rpmbuild/SOURCES/
+          cp packaging/rpm/seaweedfs.spec ~/rpmbuild/SPECS/
+          cp -r packaging/debian/* ~/rpmbuild/SOURCES/
+          rpmbuild -bb ~/rpmbuild/SPECS/seaweedfs.spec
+
+      - name: Upload RPM
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-packages
+          path: ~/rpmbuild/RPMS/**/*.rpm
+
+  sign:
+    needs: [package-deb, package-rpm]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Generate checksums
+        run: |
+          sha256sum */* > CHECKSUMS.txt
+
+      - name: Sign artifacts
+        if: env.GPG_KEY != ''
+        run: |
+          echo $GPG_KEY | base64 -d > key.gpg
+          gpg --import key.gpg
+          for f in */*; do
+            [ -f "$f" ] && gpg --detach-sign --armor "$f"
+          done
+        env:
+          GPG_KEY: ${{ secrets.GPG_KEY }}
+
+      - name: Upload signed artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: |
+            *
+            */
+
+  release:
+    needs: sign
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            **/*
+            */*
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

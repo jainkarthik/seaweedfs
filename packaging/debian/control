@@ -1,0 +1,44 @@
+Source: seaweedfs
+Section: storage
+Priority: optional
+Maintainer: SeaweedFS Team <team@seaweedfs.com>
+Build-Depends: debhelper-compat (= 13), golang-go
+Standards-Version: 4.6.0
+
+Package: seaweedfs
+Architecture: any
+Depends: ${misc:Depends}, adduser
+Description: SeaweedFS Distributed Object Store and File System
+ SeaweedFS is a distributed object storage and file system designed for
+ large scale data storage. It features:
+  - Distributed hash-based file storage
+  - S3-compatible API
+  - Filer for POSIX-like access
+  - Volume server for actual storage
+  - Master server for cluster management
+ .
+ This package provides the SeaweedFS server binaries.
+
+Package: seaweedfs-master
+Architecture: any
+Depends: ${misc:Depends}, seaweedfs (= ${source:Version})
+Description: SeaweedFS Master Server
+ The master server manages cluster topology and volume placement.
+
+Package: seaweedfs-volume
+Architecture: any
+Depends: ${misc:Depends}, seaweedfs (= ${source:Version})
+Description: SeaweedFS Volume Server
+ The volume server handles actual data storage.
+
+Package: seaweedfs-filer
+Architecture: any
+Depends: ${misc:Depends}, seaweedfs (= ${source:Version})
+Description: SeaweedFS Filer
+ The filer provides POSIX-like file system access.
+
+Package: seaweedfs-s3
+Architecture: any
+Depends: ${misc:Depends}, seaweedfs (= ${source:Version})
+Description: SeaweedFS S3 API Server
+ The S3 gateway provides S3-compatible REST API access.

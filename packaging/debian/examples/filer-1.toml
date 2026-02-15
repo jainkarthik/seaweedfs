@@ -1,0 +1,19 @@
+[filer]
+  [filer.port]
+    port = 8888
+  [filer.bind]
+    host = "0.0.0.0"
+  [filer.master]
+    master = "localhost:9333"
+  [filer.store]
+    provider = "mysql"
+    hostname = "localhost"
+    port = 3306
+    username = "root"
+    password = ""
+    database = "seaweedfs"
+    [filer.store.sql]
+      enabled = true
+
+[leveldb]
+  local = "/var/lib/weed/filer"

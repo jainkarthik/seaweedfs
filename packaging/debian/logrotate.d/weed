@@ -1,0 +1,10 @@
+/var/log/weed/*.log {
+    daily
+    rotate 14
+    compress
+    missingok
+    notifempty
+    copytruncate
+    create 0640 weed weed
+    dateext
+}

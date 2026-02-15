@@ -1,0 +1,18 @@
+[master]
+  [master.port]
+    port = 9333
+  [master.bind]
+    host = "0.0.0.0"
+  [master.metaStore]
+    dir = "/var/lib/weed/master"
+  [master.volumeStore]
+    dir = "/var/lib/weed/volumes"
+  [master.cluster]
+    replicas = 1
+
+[heartbeat]
+  interval = 30
+
+[raft]
+  heartbeat = 30
+  election = 65

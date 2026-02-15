@@ -1,0 +1,38 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --with=systemd
+
+override_dh_auto_build:
+	# Build is done externally via Makefile
+	@echo "Skipping dh_auto_build - binary provided externally"
+
+override_dh_systemd_enable:
+	# Don't auto-enable systemd units during build
+	@:
+
+override_dh_systemd_start:
+	# Don't start services during build
+	@:
+
+override_dh_install:
+	dh_install
+	# Install systemd units
+	install -d debian/seaweedfs/usr/lib/systemd/system/
+	install -m 644 packaging/debian/weed-master@.service debian/seaweedfs/usr/lib/systemd/system/
+	install -m 644 packaging/debian/weed-volume@.service debian/seaweedfs/usr/lib/systemd/system/
+	install -m 644 packaging/debian/weed-filer@.service debian/seaweedfs/usr/lib/systemd/system/
+	install -m 644 packaging/debian/weed-s3@.service debian/seaweedfs/usr/lib/systemd/system/
+	# Install config templates
+	install -d debian/seaweedfs/etc/default/weed/
+	install -m 644 packaging/debian/weed.conf debian/seaweedfs/etc/default/weed/
+	install -d debian/seaweedfs/etc/weed/
+	# Install logrotate
+	install -d debian/seaweedfs/etc/logrotate.d/
+	install -m 644 packaging/debian/logrotate.d/weed debian/seaweedfs/etc/logrotate.d/
+	# Install HAProxy config
+	install -d debian/seaweedfs/etc/haproxy/conf.d/
+	install -m 644 packaging/debian/haproxy-weed-s3.cfg debian/seaweedfs/etc/haproxy/conf.d/weed-s3.cfg
+	# Install healthcheck script
+	install -d debian/seaweedfs/opt/weed/
+	install -m 755 packaging/debian/healthcheck.sh debian/seaweedfs/opt/weed/
