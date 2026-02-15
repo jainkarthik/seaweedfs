@@ -36,3 +36,5 @@ override_dh_install:
 	# Install healthcheck script
 	install -d debian/seaweedfs/opt/weed/
 	install -m 755 packaging/debian/healthcheck.sh debian/seaweedfs/opt/weed/
+	install -d debian/seaweedfs/etc/weed/examples/
+	install -m 644 packaging/debian/examples/*.toml debian/seaweedfs/etc/weed/examples/

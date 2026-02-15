@@ -1,0 +1,41 @@
+#!/bin/bash
+set -e
+
+case "$1" in
+    configure)
+        # Create system user if it doesn't exist
+        if ! id weed &>/dev/null; then
+            useradd --system --no-create-home --shell /usr/sbin/nologin weed || true
+        fi
+
+        # Create required directories
+        mkdir -p /opt/weed
+        mkdir -p /var/log/weed
+        mkdir -p /run/weed
+
+        # Set ownership
+        chown -R weed:weed /opt/weed /var/log/weed /run/weed 2>/dev/null || true
+
+        # Ensure binary is executable
+        if [ -f /opt/weed/weed ]; then
+            chmod 0755 /opt/weed/weed
+        fi
+
+        # Load systemd modules if needed
+        if command -v systemctl &>/dev/null; then
+            systemctl daemon-reload 2>/dev/null || true
+        fi
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        exit 0
+        ;;
+
+    *)
+        exit 0
+        ;;
+esac
+
+
+
+exit 0

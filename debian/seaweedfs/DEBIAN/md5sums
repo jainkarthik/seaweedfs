@@ -1,0 +1,8 @@
+6562d22cc2c7de79c7f4900013ea0340  opt/weed/healthcheck.sh
+843b8cb03b7a80360db79e0f69e3c79e  usr/bin/seaweedfs-weed
+974b30462eb1a7717c3d186055be0a75  usr/lib/systemd/system/weed-filer@.service
+475721ced9ce53b48dcce1d3fdaddbf4  usr/lib/systemd/system/weed-master@.service
+7071c928a2ba4cce4be0e627f6301f8f  usr/lib/systemd/system/weed-s3@.service
+4cc020f797b3cc19cf056574ce965f42  usr/lib/systemd/system/weed-volume@.service
+9a73f831a1917388ffd18f05a51a63ad  usr/share/doc/seaweedfs/changelog.Debian.gz
+c8e690376b938a8ba6a368541f081b15  usr/share/doc/seaweedfs/copyright

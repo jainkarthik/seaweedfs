@@ -1,0 +1,19 @@
+Package: seaweedfs
+Version: 4.12-1
+Architecture: all
+Maintainer: SeaweedFS Team <team@seaweedfs.com>
+Installed-Size: 165102
+Depends: adduser
+Section: storage
+Priority: optional
+Description: SeaweedFS Distributed Object Store and File System
+ SeaweedFS is a distributed object storage and file system designed for
+ large scale data storage. It features:
+  - Distributed hash-based file storage
+  - S3-compatible API
+  - Filer for POSIX-like access
+  - Volume server for actual storage
+  - Master server for cluster management
+ .
+ This package provides the SeaweedFS server binaries, systemd service
+ templates, and configuration files.

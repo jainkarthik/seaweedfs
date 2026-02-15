@@ -1,0 +1,33 @@
+#!/bin/bash
+set -e
+
+case "$1" in
+    purge)
+        # Remove system user and group
+        userdel weed 2>/dev/null || true
+        groupdel weed 2>/dev/null || true
+
+        # Remove directories
+        rm -rf /opt/weed /var/log/weed /run/weed 2>/dev/null || true
+
+        # Reload systemd
+        if command -v systemctl &>/dev/null; then
+            systemctl daemon-reload 2>/dev/null || true
+        fi
+        ;;
+
+    remove|upgrade|abort-upgrade|abort-remove|abort-deconfigure|disappear)
+        # Reload systemd
+        if command -v systemctl &>/dev/null; then
+            systemctl daemon-reload 2>/dev/null || true
+        fi
+        ;;
+
+    *)
+        exit 0
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

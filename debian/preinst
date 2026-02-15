@@ -1,0 +1,24 @@
+#!/bin/bash
+set -e
+
+case "$1" in
+    install)
+        # Pre-install checks
+        ;;
+
+    upgrade)
+        # Pre-upgrade checks
+        ;;
+
+    abort-upgrade)
+        # Handle abort
+        ;;
+
+    *)
+        exit 0
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

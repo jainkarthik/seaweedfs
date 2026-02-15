@@ -1,0 +1,9 @@
+seaweedfs (4.12-1) jammy; urgency=low
+
+  * Initial release for SeaweedFS Enterprise Packaging
+  * STIG-compliant systemd service templates
+  * Multi-instance support via systemd templating
+  * FIPS-enabled build support
+  * ZFS-optimized configuration
+
+ -- SeaweedFS Team <team@seaweedfs.com>  Sun, 15 Feb 2026 00:00:00 +0000

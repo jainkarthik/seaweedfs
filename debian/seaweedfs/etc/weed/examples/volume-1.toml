@@ -1,0 +1,21 @@
+[volume]
+  [volume.port]
+    port = 8080
+  [volume.bind]
+    host = "0.0.0.0"
+  [volume.dataCenter]
+    name = "dc1"
+  [volume.rack]
+    name = "rack1"
+  [volume.server]
+    name = "volume-1"
+  [volume.filer]
+    default = "localhost:8888"
+  [volume.master]
+    volume = "localhost:9333"
+    replication = "000"
+    collection = "weed"
+
+[disk]
+  [disk.os]
+    atime = false
