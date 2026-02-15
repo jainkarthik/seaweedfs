@@ -19,11 +19,13 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        arch: [amd64, arm64]
-        fips: [false, true]
-        exclude:
-          - arch: arm64
+        include:
+          - arch: amd64
+            fips: false
+          - arch: amd64
             fips: true
+          - arch: arm64
+            fips: false
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -44,9 +46,12 @@ jobs:
       - name: Build binary
         env:
           FIPS_ENABLED: ${{ matrix.fips }}
+          ARCH: ${{ matrix.arch }}
         run: |
           if [ "$FIPS_ENABLED" = "true" ]; then
             make build-fips
+          elif [ "$ARCH" = "arm64" ]; then
+            make build-arm64
           else
             make build-amd64
           fi
@@ -117,10 +122,9 @@ jobs:
           severity-cutoff: high
           fail-only: true
 
-  package-deb:
+  package-deb-amd64:
     needs: [build, sbom, scan]
     runs-on: ubuntu-latest
-    container: ubuntu:22.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -128,26 +132,59 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: seaweedfs-amd64-*
           path: artifacts
 
       - name: Install build dependencies
         run: |
-          apt-get update
-          apt-get install -y dpkg-dev debhelper build-essential
+          sudo apt-get update
+          sudo apt-get install -y dpkg-dev debhelper build-essential
 
       - name: Build DEB
         run: |
-          VERSION=${{ env.VERSION }}
-          mkdir -p build
-          cp artifacts/*/weed-*-linux-* build/
-          cd build
-          dpkg-buildpackage -b -uc -us
+          mkdir -p artifacts/build
+          cp artifacts/seaweedfs-amd64-standard/weed-* artifacts/build/
+          cp -r debian artifacts/build/
+          cd artifacts/build
+          dpkg-buildpackage -b -uc -us -d
 
       - name: Upload DEB
         uses: actions/upload-artifact@v4
         with:
-          name: deb-packages
-          path: *.deb
+          name: deb-packages-amd64
+          path: artifacts/build/*.deb
+
+  package-deb-arm64:
+    needs: [build, sbom, scan]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: seaweedfs-arm64-*
+          path: artifacts
+
+      - name: Install ARM64 support
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static dpkg-dev debhelper build-essential
+
+      - name: Build DEB
+        run: |
+          mkdir -p artifacts/build
+          cp artifacts/seaweedfs-arm64-standard/weed-* artifacts/build/
+          cp -r debian artifacts/build/
+          cd artifacts/build
+          dpkg-buildpackage -b -uc -us -d --host-arch arm64
+
+      - name: Upload DEB
+        uses: actions/upload-artifact@v4
+        with:
+          name: deb-packages-arm64
+          path: artifacts/build/*.deb
 
   package-rpm:
     needs: [build, sbom, scan]
@@ -160,6 +197,7 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
+          pattern: seaweedfs-amd64-*
           path: artifacts
 
       - name: Install build dependencies
@@ -170,7 +208,7 @@ jobs:
         run: |
           VERSION=${{ env.VERSION }}
           mkdir -p ~/rpmbuild/SOURCES
-          cp artifacts/*/weed-*-linux-* ~/rpmbuild/SOURCES/
+          cp artifacts/seaweedfs-amd64-standard/weed-* ~/rpmbuild/SOURCES/
           cp packaging/rpm/seaweedfs.spec ~/rpmbuild/SPECS/
           cp -r packaging/debian/* ~/rpmbuild/SOURCES/
           rpmbuild -bb ~/rpmbuild/SPECS/seaweedfs.spec
@@ -182,7 +220,7 @@ jobs:
           path: ~/rpmbuild/RPMS/**/*.rpm
 
   sign:
-    needs: [package-deb, package-rpm]
+    needs: [package-deb-amd64, package-deb-arm64, package-rpm]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts

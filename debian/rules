@@ -1,14 +1,15 @@
 #!/usr/bin/make -f
 
+# Detect architecture
+DEB_HOST_ARCH := $(shell dpkg --print-architecture)
+BINARY_NAME = weed-$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")-linux-$(DEB_HOST_ARCH)
+
 %:
 	dh $@
 
 override_dh_auto_build:
 	@echo "Binary should be built externally via Makefile"
 	@mkdir -p tmp
-	@if [ -f ../weed-4.12-4-g7c610143f-linux-amd64 ]; then \
-		cp ../weed-4.12-4-g7c610143f-linux-amd64 tmp/weed; \
-	fi
 
 override_dh_auto_clean:
 	@echo "Skipping clean - binary is pre-built"
@@ -17,15 +18,20 @@ override_dh_auto_test:
 	@echo "Skipping test - binary is pre-built"
 
 override_dh_auto_install:
-	@echo "Installing files manually"
+	@echo "Installing files for architecture: $(DEB_HOST_ARCH)"
 	@mkdir -p debian/seaweedfs/usr/bin/
-	@if [ -f ../seaweedfs/weed-4.12-4-g7c610143f-dirty-linux-amd64 ]; then \
-		cp ../seaweedfs/weed-4.12-4-g7c610143f-dirty-linux-amd64 debian/seaweedfs/usr/bin/seaweedfs-weed; \
+	@if [ -f ../seaweedfs/$(BINARY_NAME) ]; then \
+		cp ../seaweedfs/$(BINARY_NAME) debian/seaweedfs/usr/bin/seaweedfs-weed; \
+		chmod 755 debian/seaweedfs/usr/bin/seaweedfs-weed; \
+		ln -sf seaweedfs-weed debian/seaweedfs/usr/bin/weed; \
+		echo "Binary $(BINARY_NAME) installed successfully"; \
+	elif [ -f ../seaweedfs/weed-*-linux-$(DEB_HOST_ARCH) ]; then \
+		cp ../seaweedfs/weed-*-linux-$(DEB_HOST_ARCH) debian/seaweedfs/usr/bin/seaweedfs-weed; \
 		chmod 755 debian/seaweedfs/usr/bin/seaweedfs-weed; \
 		ln -sf seaweedfs-weed debian/seaweedfs/usr/bin/weed; \
 		echo "Binary installed successfully"; \
 	else \
-		echo "WARNING: Binary not found at ../seaweedfs/weed-4.12-4-g7c610143f-dirty-linux-amd64"; \
+		echo "WARNING: Binary not found for $(DEB_HOST_ARCH)"; \
 	fi
 	install -d debian/seaweedfs/usr/lib/systemd/system/
 	install -m 644 debian/weed-master@.service debian/seaweedfs/usr/lib/systemd/system/

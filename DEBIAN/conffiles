@@ -1,0 +1,7 @@
+/etc/default/weed/weed.conf
+/etc/haproxy/conf.d/weed-s3.cfg
+/etc/logrotate.d/weed
+/etc/weed/examples/filer-1.toml
+/etc/weed/examples/master-1.toml
+/etc/weed/examples/s3-1.toml
+/etc/weed/examples/volume-1.toml

@@ -2,13 +2,17 @@
 """
 SeaweedFS Bucket Info Script
 Creates a bucket, uploads test files, and retrieves bucket object count and size.
+Uses async/parallel fetching for all buckets.
 """
 
 import boto3
+import asyncio
+import aiobotocore.session
 import os
 import uuid
 import sys
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
 S3_ENDPOINT = "http://localhost:8333"
 S3_ACCESS_KEY = "admin"
@@ -53,8 +57,47 @@ def upload_test_files(s3_client, bucket_name, count=5):
     return test_files
 
 
-def get_bucket_info(s3_client, bucket_name):
-    """Get bucket object count and total size using S3 API."""
+def list_all_buckets(s3_client):
+    """List all buckets."""
+    response = s3_client.list_buckets()
+    return [bucket["Name"] for bucket in response.get("Buckets", [])]
+
+
+async def get_bucket_info_async(bucket_name, session):
+    """Get bucket object count and total size using async S3 API."""
+    total_size = 0
+    object_count = 0
+    
+    config = aiobotocore.config.AioConfig(
+        endpoint_url=S3_ENDPOINT,
+        aws_access_key_id=S3_ACCESS_KEY,
+        aws_secret_access_key=S3_SECRET_KEY,
+    )
+    
+    async with session.create_client("s3", config=config) as client:
+        try:
+            paginator = client.get_paginator("list_objects_v2")
+            async for page in paginator.paginate(Bucket=bucket_name):
+                if "Contents" in page:
+                    for obj in page["Contents"]:
+                        total_size += obj.get("Size", 0)
+                        object_count += 1
+            return bucket_name, object_count, total_size
+        except Exception as e:
+            print(f"Error getting bucket info for {bucket_name}: {e}")
+            return bucket_name, None, None
+
+
+async def get_all_buckets_info_async(bucket_names):
+    """Fetch bucket info for all buckets in parallel."""
+    session = aiobotocore.session.get_session()
+    tasks = [get_bucket_info_async(name, session) for name in bucket_names]
+    results = await asyncio.gather(*tasks)
+    return results
+
+
+def get_bucket_info_sync(s3_client, bucket_name):
+    """Get bucket info synchronously (fallback)."""
     total_size = 0
     object_count = 0
     
@@ -74,12 +117,34 @@ def get_bucket_info(s3_client, bucket_name):
         return None, None
 
 
+def get_all_buckets_info_parallel(bucket_names, max_workers=10):
+    """Fetch bucket info for all buckets in parallel using thread pool."""
+    s3_client = create_s3_client()
+    
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(get_bucket_info_sync, s3_client, name): name 
+            for name in bucket_names
+        }
+        
+        results = []
+        for future in futures:
+            bucket_name = futures[future]
+            try:
+                object_count, total_size = future.result()
+                results.append((bucket_name, object_count, total_size))
+            except Exception as e:
+                print(f"Error for bucket {bucket_name}: {e}")
+                results.append((bucket_name, None, None))
+    
+    return results
+
+
 def get_bucket_info_via_filer(filer_url="http://localhost:8888"):
     """Get bucket info via Filer REST API."""
     import requests
     
     try:
-        # List buckets via filer
         response = requests.get(f"{filer_url}/vol/buckets")
         if response.status_code == 200:
             buckets = response.json()
@@ -95,26 +160,41 @@ def main():
     
     s3_client = create_s3_client()
     
-    # Create bucket
     create_bucket(s3_client, BUCKET_NAME)
     
-    # Upload test files
     print("\nUploading test files...")
     upload_test_files(s3_client, BUCKET_NAME, count=5)
     
-    # Get bucket info via S3 API
-    print("\nFetching bucket info via S3 API...")
-    object_count, total_size = get_bucket_info(s3_client, BUCKET_NAME)
+    print("\nFetching all buckets...")
+    buckets = list_all_buckets(s3_client)
+    print(f"Found {len(buckets)} buckets: {buckets}")
     
-    print(f"\n{'=' * 50}")
-    print("Bucket Information")
-    print(f"{'=' * 50}")
-    print(f"Bucket Name:     {BUCKET_NAME}")
-    print(f"Object Count:    {object_count}")
-    print(f"Total Size:      {total_size} bytes ({total_size / 1024:.2f} KB)")
-    print(f"{'=' * 50}")
+    print("\nFetching bucket info in parallel (async)...")
+    try:
+        results = asyncio.run(get_all_buckets_info_async(buckets))
+    except Exception as e:
+        print(f"Async failed, using thread pool: {e}")
+        results = get_all_buckets_info_parallel(buckets)
     
-    # Also try via Filer API
+    print(f"\n{'=' * 60}")
+    print("Bucket Information (Parallel Fetch)")
+    print(f"{'=' * 60}")
+    print(f"{'Bucket Name':<30} {'Objects':<10} {'Size (bytes)':<15}")
+    print("-" * 60)
+    
+    total_objects = 0
+    total_size = 0
+    
+    for bucket_name, object_count, size in results:
+        if object_count is not None:
+            print(f"{bucket_name:<30} {object_count:<10} {size:<15}")
+            total_objects += object_count
+            total_size += size
+    
+    print("-" * 60)
+    print(f"{'TOTAL':<30} {total_objects:<10} {total_size:<15}")
+    print(f"{'=' * 60}")
+    
     get_bucket_info_via_filer()
     
     print("\nDone!")
