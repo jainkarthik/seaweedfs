@@ -21,7 +21,7 @@ LockPersonality=true
 CapabilityBoundingSet=
 AmbientCapabilities=
 SystemCallArchitectures=native
-ExecStart=/opt/weed/weed s3 -port=8000 -domainName=localhost -master=localhost:9333
+ExecStart=/opt/weed/weed s3 -port=8000 -ip=localhost -filer=localhost:9333 -config=/etc/seaweedfs/s3.json
 Restart=on-failure
 RestartSec=5s
 TimeoutStartSec=30s
@@ -29,7 +29,7 @@ TimeoutStopSec=30s
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=weed-s3-%i
-
+LimitNOFILE=1048576
 RuntimeDirectory=weed-s3-%i
 RuntimeDirectoryMode=0755
 

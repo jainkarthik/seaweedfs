@@ -21,7 +21,7 @@ LockPersonality=true
 CapabilityBoundingSet=
 AmbientCapabilities=
 SystemCallArchitectures=native
-ExecStart=/opt/weed/weed master -port=9333 -ip=localhost -volumePreStopSeconds=5
+ExecStart=/opt/weed/weed master -port=9333 -ip=localhost
 Restart=on-failure
 RestartSec=5s
 TimeoutStartSec=30s

@@ -21,10 +21,37 @@ case "$1" in
             chmod 0755 /opt/weed/weed
         fi
 
-        # Load systemd modules if needed
+        # Copy example configs if they don't exist
+        if [ ! -f /etc/weed/master.toml ]; then
+            cp /etc/weed/examples/master-1.toml /etc/weed/master.toml 2>/dev/null || true
+        fi
+        if [ ! -f /etc/weed/volume.toml ]; then
+            cp /etc/weed/examples/volume-1.toml /etc/weed/volume.toml 2>/dev/null || true
+        fi
+        if [ ! -f /etc/weed/filer.toml ]; then
+            cp /etc/weed/examples/filer-1.toml /etc/weed/filer.toml 2>/dev/null || true
+        fi
+
+        # Reload systemd to detect new service files
         if command -v systemctl &>/dev/null; then
             systemctl daemon-reload 2>/dev/null || true
         fi
+
+        echo ""
+        echo "=============================================="
+        echo "SeaweedFS installed successfully!"
+        echo ""
+        echo "Next steps:"
+        echo "1. Edit configuration files in /etc/weed/"
+        echo "2. Enable and start services:"
+        echo ""
+        echo "   Master:    sudo systemctl enable --now weed-master@1"
+        echo "   Volume:    sudo systemctl enable --now weed-volume@1"
+        echo "   Filer:     sudo systemctl enable --now weed-filer@1"
+        echo "   S3 API:    sudo systemctl enable --now weed-s3@1"
+        echo ""
+        echo "For multiple instances, use @2, @3, etc."
+        echo "=============================================="
         ;;
 
     abort-upgrade|abort-remove|abort-deconfigure)

@@ -21,7 +21,7 @@ LockPersonality=true
 CapabilityBoundingSet=
 AmbientCapabilities=
 SystemCallArchitectures=native
-ExecStart=/opt/weed/weed volume -port=8080 -ip=localhost -volumePreStopSeconds=5 -mserver=localhost:9333
+ExecStart=/opt/weed/weed volume -port=8080 -ip=localhost -mserver=localhost:9333
 Restart=on-failure
 RestartSec=5s
 TimeoutStartSec=30s
@@ -29,7 +29,7 @@ TimeoutStopSec=30s
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=weed-volume-%i
-
+LimitNOFILE=1048576
 RuntimeDirectory=weed-volume-%i
 RuntimeDirectoryMode=0755
 
