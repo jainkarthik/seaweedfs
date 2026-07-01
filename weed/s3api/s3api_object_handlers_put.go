@@ -15,6 +15,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pquerna/cachecontrol/cacheobject"
@@ -480,36 +481,70 @@ func (s3a *S3ApiServer) putToFiler(r *http.Request, filePath string, dataReader 
 		collection = s3a.getCollectionName(bucket)
 	}
 
+	// Batch AssignVolume calls so high-throughput uploads don't pay one assign RPC
+	// per chunk. The master/filer may return a base fid with Count>1, and volume
+	// servers accept suffixes "_N" to address reserved subsequent ids.
+	assignBatchSize := s3a.option.UploadChunkParallelism
+	if assignBatchSize <= 0 {
+		assignBatchSize = 1
+	}
+	type assignBatchState struct {
+		sync.Mutex
+		base  *filer_pb.AssignVolumeResponse
+		next  int
+		limit int
+	}
+	assignState := &assignBatchState{}
+
 	// Create assign function for chunked upload
 	assignFunc := func(ctx context.Context, count int, expectedDataSize uint64) (*operation.VolumeAssignRequest, *operation.AssignResult, error) {
-		var assignResult *filer_pb.AssignVolumeResponse
-		err := s3a.WithFilerClient(false, func(client filer_pb.SeaweedFilerClient) error {
-			resp, err := client.AssignVolume(ctx, &filer_pb.AssignVolumeRequest{
-				Count:            int32(count),
-				Replication:      "",
-				Collection:       collection,
-				DiskType:         "",
-				DataCenter:       s3a.option.DataCenter,
-				Path:             filePath,
-				ExpectedDataSize: expectedDataSize,
-				TtlSec:           lifecycleTTLSec,
+		assignState.Lock()
+		defer assignState.Unlock()
+
+		if assignState.base == nil || assignState.next >= assignState.limit {
+			var assignResult *filer_pb.AssignVolumeResponse
+			err := s3a.WithFilerClient(false, func(client filer_pb.SeaweedFilerClient) error {
+				resp, err := client.AssignVolume(ctx, &filer_pb.AssignVolumeRequest{
+					Count:            int32(assignBatchSize),
+					Replication:      "",
+					Collection:       collection,
+					DiskType:         "",
+					DataCenter:       s3a.option.DataCenter,
+					Path:             filePath,
+					ExpectedDataSize: expectedDataSize,
+					TtlSec:           lifecycleTTLSec,
+				})
+				if err != nil {
+					return fmt.Errorf("assign volume: %w", err)
+				}
+				if resp.Error != "" {
+					return fmt.Errorf("assign volume: %v", resp.Error)
+				}
+				assignResult = resp
+				return nil
 			})
 			if err != nil {
-				return fmt.Errorf("assign volume: %w", err)
+				return nil, nil, err
 			}
-			if resp.Error != "" {
-				return fmt.Errorf("assign volume: %v", resp.Error)
+			limit := int(assignResult.Count)
+			if limit <= 0 {
+				limit = 1
 			}
-			assignResult = resp
-			return nil
-		})
-		if err != nil {
-			return nil, nil, err
+			assignState.base = assignResult
+			assignState.next = 0
+			assignState.limit = limit
 		}
+
+		assignResult := assignState.base
+		fid := assignResult.FileId
+		if assignState.next > 0 {
+			fid = fmt.Sprintf("%s_%d", assignResult.FileId, assignState.next)
+		}
+		assignState.next++
 
 		// Convert filer_pb.AssignVolumeResponse to operation.AssignResult
 		result := &operation.AssignResult{
-			Fid:       assignResult.FileId,
+			Fid:       fid,
 			Url:       assignResult.Location.Url,
 			PublicUrl: assignResult.Location.PublicUrl,
 			Count:     uint64(count),

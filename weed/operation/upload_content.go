@@ -400,17 +400,6 @@ func (uploader *Uploader) doUploadData(ctx context.Context, data []byte, option 
 }
 
 func (uploader *Uploader) upload_content(ctx context.Context, fillBufferFunction func(w io.Writer) error, originalDataSize int, option *UploadOption) (*UploadResult, error) {
-	var body_writer *multipart.Writer
-	var reqReader *bytes.Reader
-	var buf *bytebufferpool.ByteBuffer
-	if option.BytesBuffer == nil {
-		buf = GetBuffer()
-		defer PutBuffer(buf)
-		body_writer = multipart.NewWriter(buf)
-	} else {
-		option.BytesBuffer.Reset()
-		body_writer = multipart.NewWriter(option.BytesBuffer)
-	}
 	h := make(textproto.MIMEHeader)
 	// Use mime.FormatMediaType for RFC 6266 compliant Content-Disposition,
 	// properly handling non-ASCII characters and special characters
@@ -429,31 +418,77 @@ func (uploader *Uploader) upload_content(ctx context.Context, fillBufferFunction
 		h.Set("Content-MD5", option.Md5)
 	}
 
-	file_writer, cp_err := body_writer.CreatePart(h)
-	if cp_err != nil {
-		glog.V(0).InfolnCtx(ctx, "error creating form file", cp_err.Error())
-		return nil, cp_err
-	}
-	if err := fillBufferFunction(file_writer); err != nil {
-		glog.V(0).InfolnCtx(ctx, "error copying data", err)
-		return nil, err
-	}
-	content_type := body_writer.FormDataContentType()
-	if err := body_writer.Close(); err != nil {
-		glog.V(0).InfolnCtx(ctx, "error closing body", err)
-		return nil, err
-	}
-	if option.BytesBuffer == nil {
-		reqReader = bytes.NewReader(buf.Bytes())
+	var (
+		reqReader    io.Reader
+		contentType  string
+		streamReader *io.PipeReader
+	)
+	// Large payloads are streamed to avoid building a second full in-memory copy
+	// of the multipart body on top of the data buffer we already hold.
+	if option.BytesBuffer == nil && originalDataSize >= 1*1024*1024 {
+		streamReader, streamWriter := io.Pipe()
+		mw := multipart.NewWriter(streamWriter)
+		contentType = mw.FormDataContentType()
+		reqReader = streamReader
+		go func() {
+			var streamErr error
+			defer func() {
+				streamWriter.CloseWithError(streamErr)
+			}()
+			fileWriter, cpErr := mw.CreatePart(h)
+			if cpErr != nil {
+				streamErr = cpErr
+				return
+			}
+			if err := fillBufferFunction(fileWriter); err != nil {
+				streamErr = err
+				return
+			}
+			if err := mw.Close(); err != nil {
+				streamErr = err
+				return
+			}
+		}()
 	} else {
-		reqReader = bytes.NewReader(option.BytesBuffer.Bytes())
+		var body_writer *multipart.Writer
+		var buf *bytebufferpool.ByteBuffer
+		if option.BytesBuffer == nil {
+			buf = GetBuffer()
+			defer PutBuffer(buf)
+			body_writer = multipart.NewWriter(buf)
+		} else {
+			option.BytesBuffer.Reset()
+			body_writer = multipart.NewWriter(option.BytesBuffer)
+		}
+		file_writer, cp_err := body_writer.CreatePart(h)
+		if cp_err != nil {
+			glog.V(0).InfolnCtx(ctx, "error creating form file", cp_err.Error())
+			return nil, cp_err
+		}
+		if err := fillBufferFunction(file_writer); err != nil {
+			glog.V(0).InfolnCtx(ctx, "error copying data", err)
+			return nil, err
+		}
+		contentType = body_writer.FormDataContentType()
+		if err := body_writer.Close(); err != nil {
+			glog.V(0).InfolnCtx(ctx, "error closing body", err)
+			return nil, err
+		}
+		if option.BytesBuffer == nil {
+			reqReader = bytes.NewReader(buf.Bytes())
+		} else {
+			reqReader = bytes.NewReader(option.BytesBuffer.Bytes())
+		}
 	}
 	req, postErr := http.NewRequestWithContext(ctx, http.MethodPost, option.UploadUrl, reqReader)
 	if postErr != nil {
+		if streamReader != nil {
+			streamReader.CloseWithError(postErr)
+		}
 		glog.V(1).InfofCtx(ctx, "create upload request %s: %v", option.UploadUrl, postErr)
 		return nil, fmt.Errorf("create upload request %s: %v", option.UploadUrl, postErr)
 	}
-	req.Header.Set("Content-Type", content_type)
+	req.Header.Set("Content-Type", contentType)
 	for k, v := range option.PairMap {
 		req.Header.Set(k, v)
 	}
