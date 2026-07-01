@@ -655,6 +655,23 @@ var (
 			Buckets:   []float64{1, 2, 4, 8, 16, 32, 64, 128, 256},
 		}, []string{"bucket"})
 
+	S3PutToFilerResultCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: Namespace,
+			Subsystem: subsystemS3,
+			Name:      "put_to_filer_result_total",
+			Help:      "Counter of S3 putToFiler outcomes.",
+		}, []string{"result", "bucket"})
+
+	S3PutToFilerUploadedBytesHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: Namespace,
+			Subsystem: subsystemS3,
+			Name:      "put_to_filer_uploaded_bytes",
+			Help:      "Histogram of object bytes uploaded via S3 putToFiler.",
+			Buckets:   []float64{1024, 102400, 1048576, 16777216, 67108864, 268435456, 1073741824, 4294967296},
+		}, []string{"bucket"})
+
 	S3BucketSizeBytesGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: Namespace,
@@ -960,6 +977,8 @@ func init() {
 	Gather.MustRegister(S3PutToFilerAssignRpcCounter)
 	Gather.MustRegister(S3PutToFilerAssignBatchSizeHistogram)
 	Gather.MustRegister(S3PutToFilerChunkCountHistogram)
+	Gather.MustRegister(S3PutToFilerResultCounter)
+	Gather.MustRegister(S3PutToFilerUploadedBytesHistogram)
 	Gather.MustRegister(S3BucketSizeBytesGauge)
 	Gather.MustRegister(S3BucketPhysicalSizeBytesGauge)
 	Gather.MustRegister(S3BucketObjectCountGauge)
@@ -1060,6 +1079,8 @@ func DeleteBucketMetrics(bucket string) {
 	c += S3PutToFilerAssignRpcCounter.DeletePartialMatch(labels)
 	c += S3PutToFilerAssignBatchSizeHistogram.DeletePartialMatch(labels)
 	c += S3PutToFilerChunkCountHistogram.DeletePartialMatch(labels)
+	c += S3PutToFilerResultCounter.DeletePartialMatch(labels)
+	c += S3PutToFilerUploadedBytesHistogram.DeletePartialMatch(labels)
 	c += S3BucketSizeBytesGauge.DeletePartialMatch(labels)
 	c += S3BucketPhysicalSizeBytesGauge.DeletePartialMatch(labels)
 	c += S3BucketObjectCountGauge.DeletePartialMatch(labels)
@@ -1113,6 +1134,7 @@ func bucketMetricTTLControl() {
 			c += S3PutToFilerStageHistogram.DeletePartialMatch(labels)
 			c += S3PutToFilerAssignBatchSizeHistogram.DeletePartialMatch(labels)
 			c += S3PutToFilerChunkCountHistogram.DeletePartialMatch(labels)
+			c += S3PutToFilerUploadedBytesHistogram.DeletePartialMatch(labels)
 			c += S3BucketSizeBytesGauge.DeletePartialMatch(labels)
 			c += S3BucketPhysicalSizeBytesGauge.DeletePartialMatch(labels)
 			c += S3BucketObjectCountGauge.DeletePartialMatch(labels)

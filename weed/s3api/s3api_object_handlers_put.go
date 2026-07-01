@@ -378,6 +378,11 @@ func (s3a *S3ApiServer) putToFiler(r *http.Request, filePath string, dataReader 
 	putToFilerStartTime := time.Now()
 	defer func() {
 		stats_collect.S3PutToFilerStageHistogram.WithLabelValues("total", bucket).Observe(time.Since(putToFilerStartTime).Seconds())
+		result := "success"
+		if code != s3err.ErrNone {
+			result = "error"
+		}
+		stats_collect.S3PutToFilerResultCounter.WithLabelValues(result, bucket).Inc()
 	}()
 	// NEW OPTIMIZATION: Write directly to volume servers, bypassing filer proxy
 	// This eliminates the filer proxy overhead for PUT operations
@@ -596,6 +601,7 @@ func (s3a *S3ApiServer) putToFiler(r *http.Request, filePath string, dataReader 
 			s3a.deleteOrphanedChunks(chunkResult.FileChunks)
 		}
 		stats_collect.S3PutToFilerChunkCountHistogram.WithLabelValues(bucket).Observe(float64(len(chunkResult.FileChunks)))
+		stats_collect.S3PutToFilerUploadedBytesHistogram.WithLabelValues(bucket).Observe(float64(chunkResult.TotalSize))
 
 		if strings.Contains(err.Error(), s3err.ErrMsgPayloadChecksumMismatch) {
 			return "", s3err.ErrInvalidDigest, SSEResponseMetadata{}
