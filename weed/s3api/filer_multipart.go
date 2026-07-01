@@ -198,6 +198,7 @@ type multipartSSES3Info struct {
 type multipartCompletionState struct {
 	deleteEntries      []*filer_pb.Entry
 	partEntries        map[int][]*filer_pb.Entry
+	latestPartEntries  map[int]*filer_pb.Entry
 	pentry             *filer_pb.Entry
 	sses3Info          *multipartSSES3Info
 	mime               string
@@ -378,6 +379,7 @@ func (s3a *S3ApiServer) prepareMultipartCompletionState(r *http.Request, input *
 
 	deleteEntries := make([]*filer_pb.Entry, 0)
 	partEntries := make(map[int][]*filer_pb.Entry, len(entries))
+	latestPartEntries := make(map[int]*filer_pb.Entry, len(entries))
 	entityTooSmall := false
 	entityWithTtl := false
 	for _, entry := range entries {
@@ -454,41 +456,36 @@ func (s3a *S3ApiServer) prepareMultipartCompletionState(r *http.Request, input *
 			stats.S3HandlerCounter.WithLabelValues(stats.ErrorCompletedPartNotFound).Inc()
 			return nil, nil, s3err.ErrInvalidPart
 		}
-		found := false
-
 		if len(partEntriesByNumber) > 1 {
 			sortEntriesByLatestChunk(partEntriesByNumber)
 		}
-		for _, entry := range partEntriesByNumber {
-			if found {
-				deleteEntries = append(deleteEntries, entry)
-				stats.S3HandlerCounter.WithLabelValues(stats.ErrorCompletedPartEntryMismatch).Inc()
-				continue
-			}
-
-			partStartChunk := len(finalParts)
-			partETag := getEtagFromEntry(entry)
-
-			for _, chunk := range entry.GetChunks() {
-				finalChunk, chunkErr := completedMultipartChunk(chunk, offset, sses3Info)
-				if chunkErr != nil {
-					glog.Errorf("completeMultipartUpload %s %s SSE-S3 chunk metadata error: %v", *input.Bucket, *input.UploadId, chunkErr)
-					return nil, nil, s3err.ErrInternalError
-				}
-				finalParts = append(finalParts, finalChunk)
-				offset += int64(chunk.Size)
-			}
-
-			partEndChunk := len(finalParts)
-			partBoundaries = append(partBoundaries, multipartPartBoundary{
-				PartNumber: partNumber,
-				StartChunk: partStartChunk,
-				EndChunk:   partEndChunk,
-				ETag:       partETag,
-			})
-
-			found = true
+		latestPartEntry := partEntriesByNumber[0]
+		latestPartEntries[partNumber] = latestPartEntry
+		for _, staleEntry := range partEntriesByNumber[1:] {
+			deleteEntries = append(deleteEntries, staleEntry)
+			stats.S3HandlerCounter.WithLabelValues(stats.ErrorCompletedPartEntryMismatch).Inc()
 		}
+
+		partStartChunk := len(finalParts)
+		partETag := getEtagFromEntry(latestPartEntry)
+
+		for _, chunk := range latestPartEntry.GetChunks() {
+			finalChunk, chunkErr := completedMultipartChunk(chunk, offset, sses3Info)
+			if chunkErr != nil {
+				glog.Errorf("completeMultipartUpload %s %s SSE-S3 chunk metadata error: %v", *input.Bucket, *input.UploadId, chunkErr)
+				return nil, nil, s3err.ErrInternalError
+			}
+			finalParts = append(finalParts, finalChunk)
+			offset += int64(chunk.Size)
+		}
+
+		partEndChunk := len(finalParts)
+		partBoundaries = append(partBoundaries, multipartPartBoundary{
+			PartNumber: partNumber,
+			StartChunk: partStartChunk,
+			EndChunk:   partEndChunk,
+			ETag:       partETag,
+		})
 	}
 
 	// Compute composite checksum from per-part checksums if the upload
@@ -502,7 +499,7 @@ func (s3a *S3ApiServer) prepareMultipartCompletionState(r *http.Request, input *
 	}
 	if checksumHeaderName != "" {
 		var checksumErr error
-		checksumValue, checksumErr = computeCompositeChecksum(checksumHeaderName, partEntries, completedPartNumbers)
+		checksumValue, checksumErr = computeCompositeChecksum(checksumHeaderName, latestPartEntries, completedPartNumbers)
 		if checksumErr != nil {
 			glog.Errorf("completeMultipartUpload: composite checksum computation failed: %v", checksumErr)
 			return nil, nil, s3err.ErrInvalidPart
@@ -512,13 +509,14 @@ func (s3a *S3ApiServer) prepareMultipartCompletionState(r *http.Request, input *
 	return &multipartCompletionState{
 		deleteEntries:      deleteEntries,
 		partEntries:        partEntries,
+		latestPartEntries:  latestPartEntries,
 		pentry:             pentry,
 		sses3Info:          sses3Info,
 		mime:               mime,
 		finalParts:         finalParts,
 		offset:             offset,
 		partBoundaries:     partBoundaries,
-		multipartETag:      calculateMultipartETag(partEntries, completedPartNumbers),
+		multipartETag:      calculateMultipartETag(latestPartEntries, completedPartNumbers),
 		entityWithTtl:      entityWithTtl,
 		checksumHeaderName: checksumHeaderName,
 		checksumValue:      checksumValue,
@@ -621,8 +619,8 @@ func (s3a *S3ApiServer) completeMultipartUpload(r *http.Request, input *s3.Compl
 
 				// Preserve ALL SSE metadata from the first part (if any)
 				// SSE metadata is stored in individual parts, not the upload directory
-				if len(completedPartNumbers) > 0 && len(completionState.partEntries[completedPartNumbers[0]]) > 0 {
-					firstPartEntry := completionState.partEntries[completedPartNumbers[0]][0]
+				if len(completedPartNumbers) > 0 && completionState.latestPartEntries[completedPartNumbers[0]] != nil {
+					firstPartEntry := completionState.latestPartEntries[completedPartNumbers[0]]
 					copySSEHeadersFromFirstPart(versionEntry, firstPartEntry, "versioned")
 				}
 				applyMultipartSSES3HeadersFromUploadEntry(versionEntry, completionState.sses3Info)
@@ -716,8 +714,8 @@ func (s3a *S3ApiServer) completeMultipartUpload(r *http.Request, input *s3.Compl
 
 				// Preserve ALL SSE metadata from the first part (if any)
 				// SSE metadata is stored in individual parts, not the upload directory
-				if len(completedPartNumbers) > 0 && len(completionState.partEntries[completedPartNumbers[0]]) > 0 {
-					firstPartEntry := completionState.partEntries[completedPartNumbers[0]][0]
+				if len(completedPartNumbers) > 0 && completionState.latestPartEntries[completedPartNumbers[0]] != nil {
+					firstPartEntry := completionState.latestPartEntries[completedPartNumbers[0]]
 					copySSEHeadersFromFirstPart(entry, firstPartEntry, "suspended versioning")
 				}
 				applyMultipartSSES3HeadersFromUploadEntry(entry, completionState.sses3Info)
@@ -779,8 +777,8 @@ func (s3a *S3ApiServer) completeMultipartUpload(r *http.Request, input *s3.Compl
 
 			// Preserve ALL SSE metadata from the first part (if any)
 			// SSE metadata is stored in individual parts, not the upload directory
-			if len(completedPartNumbers) > 0 && len(completionState.partEntries[completedPartNumbers[0]]) > 0 {
-				firstPartEntry := completionState.partEntries[completedPartNumbers[0]][0]
+			if len(completedPartNumbers) > 0 && completionState.latestPartEntries[completedPartNumbers[0]] != nil {
+				firstPartEntry := completionState.latestPartEntries[completedPartNumbers[0]]
 				copySSEHeadersFromFirstPart(entry, firstPartEntry, "non-versioned")
 			}
 			applyMultipartSSES3HeadersFromUploadEntry(entry, completionState.sses3Info)
@@ -1221,17 +1219,13 @@ func sortEntriesByLatestChunk(entries []*filer_pb.Entry) {
 	})
 }
 
-func calculateMultipartETag(partEntries map[int][]*filer_pb.Entry, completedPartNumbers []int) string {
+func calculateMultipartETag(latestPartEntries map[int]*filer_pb.Entry, completedPartNumbers []int) string {
 	var etags []byte
 	for _, partNumber := range completedPartNumbers {
-		entries, ok := partEntries[partNumber]
-		if !ok || len(entries) == 0 {
+		entry, ok := latestPartEntries[partNumber]
+		if !ok || entry == nil {
 			continue
 		}
-		if len(entries) > 1 {
-			sortEntriesByLatestChunk(entries)
-		}
-		entry := entries[0]
 		etag := getEtagFromEntry(entry)
 		glog.V(4).Infof("calculateMultipartETag: part %d, entry %s, getEtagFromEntry result: %s", partNumber, entry.Name, etag)
 		etag = strings.Trim(etag, "\"")
@@ -1253,7 +1247,7 @@ func calculateMultipartETag(partEntries map[int][]*filer_pb.Entry, completedPart
 // This follows the AWS S3 multipart checksum specification.
 // Returns an error if a part is missing its checksum (the upload was initiated with
 // a checksum algorithm, so all parts must have been uploaded with checksums).
-func computeCompositeChecksum(checksumHeaderName string, partEntries map[int][]*filer_pb.Entry, completedPartNumbers []int) (string, error) {
+func computeCompositeChecksum(checksumHeaderName string, latestPartEntries map[int]*filer_pb.Entry, completedPartNumbers []int) (string, error) {
 	// Determine the algorithm from the header name
 	algo := checksumAlgorithmFromHeaderName(checksumHeaderName)
 	if algo == ChecksumAlgorithmNone {
@@ -1263,14 +1257,10 @@ func computeCompositeChecksum(checksumHeaderName string, partEntries map[int][]*
 	// Collect raw per-part checksums
 	var combined []byte
 	for _, partNumber := range completedPartNumbers {
-		entries, ok := partEntries[partNumber]
-		if !ok || len(entries) == 0 {
+		entry, ok := latestPartEntries[partNumber]
+		if !ok || entry == nil {
 			return "", fmt.Errorf("part %d not found", partNumber)
 		}
-		if len(entries) > 1 {
-			sortEntriesByLatestChunk(entries)
-		}
-		entry := entries[0]
 		if entry.Extended == nil {
 			return "", fmt.Errorf("part %d missing checksum: upload initiated with %s but part was uploaded without a checksum", partNumber, checksumHeaderName)
 		}

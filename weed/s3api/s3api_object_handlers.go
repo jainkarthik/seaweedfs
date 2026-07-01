@@ -28,6 +28,7 @@ import (
 	util_http "github.com/seaweedfs/seaweedfs/weed/util/http"
 
 	"github.com/seaweedfs/seaweedfs/weed/glog"
+	stats_collect "github.com/seaweedfs/seaweedfs/weed/stats"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -57,6 +58,111 @@ func (cw *countingWriter) Write(p []byte) (int, error) {
 	n, err := cw.w.Write(p)
 	cw.written += int64(n)
 	return n, err
+}
+
+func observeGetObjectStage(bucket, stage string, start time.Time) {
+	stats_collect.S3GetObjectStageHistogram.WithLabelValues(stage, bucket).Observe(time.Since(start).Seconds())
+}
+
+func recordGetObjectResultMetrics(bucket string, start time.Time, streamErr error, bytesSent int64) {
+	observeGetObjectStage(bucket, "total", start)
+
+	result := "success"
+	if streamErr != nil {
+		if isCanceledStreamingError(streamErr) {
+			result = "canceled"
+		} else {
+			result = "error"
+		}
+	}
+	stats_collect.S3GetObjectResultCounter.WithLabelValues(result, bucket).Inc()
+	if bytesSent > 0 {
+		stats_collect.S3GetObjectDownloadedBytesHistogram.WithLabelValues(bucket).Observe(float64(bytesSent))
+	}
+}
+
+const (
+	volumeReadMaxAttempts   = 3
+	volumeReadRetryBaseWait = 20 * time.Millisecond
+)
+
+func recordReliabilityEvent(operation, event string) {
+	stats_collect.S3ReliabilityEventCounter.WithLabelValues(operation, event).Inc()
+}
+
+func isRetryableVolumeStatus(code int) bool {
+	return code == http.StatusTooManyRequests || code >= http.StatusInternalServerError
+}
+
+func waitForRetry(ctx context.Context, attempt int) error {
+	wait := volumeReadRetryBaseWait * time.Duration(1<<(attempt-1))
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func fetchVolumeServerWithRetry(
+	ctx context.Context,
+	operation string,
+	makeRequest func() (*http.Request, error),
+	acceptableStatus func(statusCode int) bool,
+) (*http.Response, error) {
+	var lastErr error
+	for attempt := 1; attempt <= volumeReadMaxAttempts; attempt++ {
+		req, err := makeRequest()
+		if err != nil {
+			return nil, err
+		}
+		resp, err := volumeServerHTTPClient.Do(req)
+		if err == nil {
+			if acceptableStatus(resp.StatusCode) {
+				if attempt > 1 {
+					recordReliabilityEvent(operation, "retry_success")
+				}
+				return resp, nil
+			}
+			if resp.StatusCode == http.StatusTooManyRequests {
+				recordReliabilityEvent(operation, "rate_limited")
+			}
+			lastErr = fmt.Errorf("unexpected status code %d", resp.StatusCode)
+			retryable := isRetryableVolumeStatus(resp.StatusCode)
+			resp.Body.Close()
+			if !retryable || attempt == volumeReadMaxAttempts {
+				if retryable && attempt == volumeReadMaxAttempts {
+					recordReliabilityEvent(operation, "retry_exhausted")
+				}
+				return nil, lastErr
+			}
+			recordReliabilityEvent(operation, "retry_attempt")
+		} else {
+			lastErr = err
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.Canceled) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					recordReliabilityEvent(operation, "timeout")
+				}
+				return nil, err
+			}
+			if attempt == volumeReadMaxAttempts {
+				recordReliabilityEvent(operation, "retry_exhausted")
+				return nil, err
+			}
+			recordReliabilityEvent(operation, "retry_attempt")
+		}
+
+		if err := waitForRetry(ctx, attempt); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				recordReliabilityEvent(operation, "timeout")
+			}
+			return nil, err
+		}
+	}
+	recordReliabilityEvent(operation, "retry_exhausted")
+	return nil, lastErr
 }
 
 // adjustRangeForPart adjusts a client's Range header to absolute offsets within a part.
@@ -912,9 +1018,10 @@ func (s3a *S3ApiServer) GetObjectHandler(w http.ResponseWriter, r *http.Request)
 
 // streamFromVolumeServers streams object data directly from volume servers, bypassing filer proxy
 // This eliminates the ~19ms filer proxy overhead by reading chunks directly
-func (s3a *S3ApiServer) streamFromVolumeServers(w http.ResponseWriter, r *http.Request, entry *filer_pb.Entry, sseType string, bucket, object, versionId string) error {
+func (s3a *S3ApiServer) streamFromVolumeServers(w http.ResponseWriter, r *http.Request, entry *filer_pb.Entry, sseType string, bucket, object, versionId string) (err error) {
 	// Profiling: Track overall and stage timings
 	t0 := time.Now()
+	var bytesSent int64
 	var (
 		rangeParseTime   time.Duration
 		headerSetTime    time.Duration
@@ -923,6 +1030,7 @@ func (s3a *S3ApiServer) streamFromVolumeServers(w http.ResponseWriter, r *http.R
 		streamExecTime   time.Duration
 	)
 	defer func() {
+		recordGetObjectResultMetrics(bucket, t0, err, bytesSent)
 		totalTime := time.Since(t0)
 		glog.V(2).Infof("  └─ streamFromVolumeServers: total=%v, rangeParse=%v, headerSet=%v, chunkResolve=%v, streamPrep=%v, streamExec=%v",
 			totalTime, rangeParseTime, headerSetTime, chunkResolveTime, streamPrepTime, streamExecTime)
@@ -944,6 +1052,7 @@ func (s3a *S3ApiServer) streamFromVolumeServers(w http.ResponseWriter, r *http.R
 		return rangeErr
 	}
 	rangeParseTime = time.Since(tRangeParse)
+	observeGetObjectStage(bucket, "range_parse", tRangeParse)
 
 	// For small files stored inline in entry.Content - validate BEFORE setting headers
 	if len(entry.Content) > 0 && totalSize == int64(len(entry.Content)) {
@@ -972,7 +1081,8 @@ func (s3a *S3ApiServer) streamFromVolumeServers(w http.ResponseWriter, r *http.R
 			w.WriteHeader(http.StatusPartialContent)
 			written, err := w.Write(entry.Content[start:end])
 			if written > 0 {
-				BucketTrafficSent(int64(written), r)
+				bytesSent = int64(written)
+				BucketTrafficSent(bytesSent, r)
 			}
 			return err
 		}
@@ -981,7 +1091,8 @@ func (s3a *S3ApiServer) streamFromVolumeServers(w http.ResponseWriter, r *http.R
 		w.WriteHeader(http.StatusOK)
 		written, err := w.Write(entry.Content)
 		if written > 0 {
-			BucketTrafficSent(int64(written), r)
+			bytesSent = int64(written)
+			BucketTrafficSent(bytesSent, r)
 		}
 		return err
 	}
@@ -1054,6 +1165,7 @@ func (s3a *S3ApiServer) streamFromVolumeServers(w http.ResponseWriter, r *http.R
 	tChunkResolve := time.Now()
 	visibleIntervals, err := filer.NonOverlappingVisibleIntervals(ctx, lookupFileIdFn, chunks, offset, offset+size)
 	chunkResolveTime = time.Since(tChunkResolve)
+	observeGetObjectStage(bucket, "chunk_resolve", tChunkResolve)
 	if err != nil {
 		if isCanceledStreamingError(err) {
 			glog.V(3).Infof("streamFromVolumeServers: request canceled while resolving chunks: %v", err)
@@ -1084,8 +1196,9 @@ func (s3a *S3ApiServer) streamFromVolumeServers(w http.ResponseWriter, r *http.R
 	// WebDAV and mount read paths.
 	tStreamPrep := time.Now()
 	chunkViews := filer.ViewFromVisibleIntervals(visibleIntervals, offset, size)
-	reader := filer.NewChunkReaderAtFromClient(ctx, s3a.readerCache, chunkViews, totalSize, filer.DefaultPrefetchCount)
+	reader := filer.NewChunkReaderAtFromClient(ctx, s3a.readerCache, chunkViews, totalSize, s3a.getDownloadChunkPrefetch())
 	streamPrepTime = time.Since(tStreamPrep)
+	observeGetObjectStage(bucket, "stream_prep", tStreamPrep)
 
 	// All validation and preparation successful - NOW set headers and write status
 	tHeaderSet := time.Now()
@@ -1099,6 +1212,7 @@ func (s3a *S3ApiServer) streamFromVolumeServers(w http.ResponseWriter, r *http.R
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 	}
 	headerSetTime = time.Since(tHeaderSet)
+	observeGetObjectStage(bucket, "header_set", tHeaderSet)
 
 	// Now write status code (headers are all set, stream is ready)
 	if isRangeRequest {
@@ -1119,17 +1233,18 @@ func (s3a *S3ApiServer) streamFromVolumeServers(w http.ResponseWriter, r *http.R
 	// Cap the copy buffer to the response size so small-object GETs (common
 	// for thumbnails, config files, etc.) don't allocate a 256 KiB scratch
 	// buffer per request.
-	const maxCopyBuf = 256 * 1024
-	copyBufSize := int64(maxCopyBuf)
+	copyBufSize := s3a.getDownloadCopyBufferBytes()
 	if size > 0 && size < copyBufSize {
 		copyBufSize = size
 	}
 	copyBuf := make([]byte, copyBufSize)
 	_, err = io.CopyBuffer(cw, io.NewSectionReader(reader, offset, size), copyBuf)
 	streamExecTime = time.Since(tStreamExec)
+	observeGetObjectStage(bucket, "stream_exec", tStreamExec)
 	// Track traffic even on partial writes for accurate egress accounting
 	if cw.written > 0 {
-		BucketTrafficSent(cw.written, r)
+		bytesSent = cw.written
+		BucketTrafficSent(bytesSent, r)
 	}
 	if err != nil {
 		switch {
@@ -1166,8 +1281,22 @@ func (s3a *S3ApiServer) createLookupFileIdFunction() func(context.Context, strin
 	return s3a.filerClient.GetLookupFileIdFunction()
 }
 
+func (s3a *S3ApiServer) getDownloadChunkPrefetch() int {
+	if s3a.option != nil && s3a.option.DownloadChunkPrefetch > 0 {
+		return s3a.option.DownloadChunkPrefetch
+	}
+	return filer.DefaultPrefetchCount
+}
+
+func (s3a *S3ApiServer) getDownloadCopyBufferBytes() int64 {
+	if s3a.option != nil && s3a.option.DownloadCopyBufferKB > 0 {
+		return int64(s3a.option.DownloadCopyBufferKB) * 1024
+	}
+	return int64(defaultDownloadCopyBufferKB) * 1024
+}
+
 // streamFromVolumeServersWithSSE handles streaming with inline SSE decryption
-func (s3a *S3ApiServer) streamFromVolumeServersWithSSE(w http.ResponseWriter, r *http.Request, entry *filer_pb.Entry, sseType string, bucket, object, versionId string) error {
+func (s3a *S3ApiServer) streamFromVolumeServersWithSSE(w http.ResponseWriter, r *http.Request, entry *filer_pb.Entry, sseType string, bucket, object, versionId string) (err error) {
 	// If not encrypted, use fast path without decryption
 	if sseType == "" || sseType == "None" {
 		return s3a.streamFromVolumeServers(w, r, entry, sseType, bucket, object, versionId)
@@ -1175,6 +1304,7 @@ func (s3a *S3ApiServer) streamFromVolumeServersWithSSE(w http.ResponseWriter, r 
 
 	// Profiling: Track SSE decryption stages
 	t0 := time.Now()
+	var bytesSent int64
 	var (
 		rangeParseTime   time.Duration
 		keyValidateTime  time.Duration
@@ -1184,6 +1314,7 @@ func (s3a *S3ApiServer) streamFromVolumeServersWithSSE(w http.ResponseWriter, r 
 		copyTime         time.Duration
 	)
 	defer func() {
+		recordGetObjectResultMetrics(bucket, t0, err, bytesSent)
 		totalTime := time.Since(t0)
 		glog.V(2).Infof("  └─ streamFromVolumeServersWithSSE (%s): total=%v, rangeParse=%v, keyValidate=%v, headerSet=%v, streamFetch=%v, decryptSetup=%v, copy=%v",
 			sseType, totalTime, rangeParseTime, keyValidateTime, headerSetTime, streamFetchTime, decryptSetupTime, copyTime)
@@ -1202,6 +1333,7 @@ func (s3a *S3ApiServer) streamFromVolumeServersWithSSE(w http.ResponseWriter, r 
 		glog.V(2).Infof("streamFromVolumeServersWithSSE: Range request bytes %d-%d/%d (size=%d)", offset, offset+size-1, totalSize, size)
 	}
 	rangeParseTime = time.Since(tRangeParse)
+	observeGetObjectStage(bucket, "range_parse", tRangeParse)
 
 	// Validate SSE keys BEFORE streaming
 	tKeyValidate := time.Now()
@@ -1255,6 +1387,7 @@ func (s3a *S3ApiServer) streamFromVolumeServersWithSSE(w http.ResponseWriter, r 
 		decryptionKey = sseS3Key
 	}
 	keyValidateTime = time.Since(tKeyValidate)
+	observeGetObjectStage(bucket, "key_validate", tKeyValidate)
 
 	// Set response headers
 	// IMPORTANT: Set ALL headers BEFORE calling WriteHeader (headers are ignored after WriteHeader)
@@ -1266,8 +1399,11 @@ func (s3a *S3ApiServer) streamFromVolumeServersWithSSE(w http.ResponseWriter, r 
 	if isRangeRequest {
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", offset, offset+size-1, totalSize))
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+	} else {
+		w.Header().Set("Content-Length", strconv.FormatInt(totalSize, 10))
 	}
 	headerSetTime = time.Since(tHeaderSet)
+	observeGetObjectStage(bucket, "header_set", tHeaderSet)
 
 	// Now write status code (headers are all set)
 	if isRangeRequest {
@@ -1288,10 +1424,12 @@ func (s3a *S3ApiServer) streamFromVolumeServersWithSSE(w http.ResponseWriter, r 
 		streamFetchTime = 0 // No full stream fetch in range-aware path
 		written, err := s3a.streamDecryptedRangeFromChunks(r.Context(), w, entry, offset, size, sseType, decryptionKey)
 		decryptSetupTime = time.Since(tDecryptSetup)
+		observeGetObjectStage(bucket, "decrypt_setup", tDecryptSetup)
 		copyTime = decryptSetupTime // Streaming is included in decrypt setup for range-aware path
 		// Track traffic even on partial writes for accurate egress accounting
 		if written > 0 {
-			BucketTrafficSent(written, r)
+			bytesSent = written
+			BucketTrafficSent(bytesSent, r)
 		}
 		if err != nil {
 			// Error after WriteHeader - response already written
@@ -1302,7 +1440,6 @@ func (s3a *S3ApiServer) streamFromVolumeServersWithSSE(w http.ResponseWriter, r 
 
 	// Full object path: Optimize multipart vs single-part
 	var decryptedReader io.Reader
-	var err error
 
 	switch sseType {
 	case s3_constants.SSETypeC:
@@ -1330,6 +1467,7 @@ func (s3a *S3ApiServer) streamFromVolumeServersWithSSE(w http.ResponseWriter, r 
 			tStreamFetch := time.Now()
 			encryptedReader, streamErr := s3a.getEncryptedStreamFromVolumes(r.Context(), entry)
 			streamFetchTime = time.Since(tStreamFetch)
+			observeGetObjectStage(bucket, "stream_fetch", tStreamFetch)
 			if streamErr != nil {
 				// Error after WriteHeader - response already written
 				return newStreamErrorWithResponse(streamErr)
@@ -1368,6 +1506,7 @@ func (s3a *S3ApiServer) streamFromVolumeServersWithSSE(w http.ResponseWriter, r 
 			tStreamFetch := time.Now()
 			encryptedReader, streamErr := s3a.getEncryptedStreamFromVolumes(r.Context(), entry)
 			streamFetchTime = time.Since(tStreamFetch)
+			observeGetObjectStage(bucket, "stream_fetch", tStreamFetch)
 			if streamErr != nil {
 				// Error after WriteHeader - response already written
 				return newStreamErrorWithResponse(streamErr)
@@ -1401,6 +1540,7 @@ func (s3a *S3ApiServer) streamFromVolumeServersWithSSE(w http.ResponseWriter, r 
 			tStreamFetch := time.Now()
 			encryptedReader, streamErr := s3a.getEncryptedStreamFromVolumes(r.Context(), entry)
 			streamFetchTime = time.Since(tStreamFetch)
+			observeGetObjectStage(bucket, "stream_fetch", tStreamFetch)
 			if streamErr != nil {
 				// Error after WriteHeader - response already written
 				return newStreamErrorWithResponse(streamErr)
@@ -1418,6 +1558,7 @@ func (s3a *S3ApiServer) streamFromVolumeServersWithSSE(w http.ResponseWriter, r 
 		}
 	}
 	decryptSetupTime = time.Since(tDecryptSetup)
+	observeGetObjectStage(bucket, "decrypt_setup", tDecryptSetup)
 
 	if err != nil {
 		glog.Errorf("SSE decryption error (%s): %v", sseType, err)
@@ -1436,12 +1577,14 @@ func (s3a *S3ApiServer) streamFromVolumeServersWithSSE(w http.ResponseWriter, r 
 
 	// Stream full decrypted object to client
 	tCopy := time.Now()
-	buf := make([]byte, 128*1024)
+	buf := make([]byte, s3a.getDownloadCopyBufferBytes())
 	copied, copyErr := io.CopyBuffer(w, decryptedReader, buf)
 	copyTime = time.Since(tCopy)
+	observeGetObjectStage(bucket, "stream_exec", tCopy)
 	// Track traffic even on partial writes for accurate egress accounting
 	if copied > 0 {
-		BucketTrafficSent(copied, r)
+		bytesSent = copied
+		BucketTrafficSent(bytesSent, r)
 	}
 	if copyErr != nil {
 		glog.Errorf("Failed to copy full object: copied %d bytes: %v", copied, copyErr)
@@ -1823,26 +1966,20 @@ func (s3a *S3ApiServer) fetchFullChunk(ctx context.Context, fileId string) (io.R
 	// Generate JWT for volume server authentication (uses config loaded once at startup)
 	jwt := filer.JwtForVolumeServer(fileId)
 
-	// Create request WITHOUT Range header to get full chunk
-	req, err := http.NewRequestWithContext(ctx, "GET", chunkUrl, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	// Set JWT for authentication
-	if jwt != "" {
-		req.Header.Set("Authorization", security.BearerPrefix+jwt)
-	}
-
-	// Use shared HTTP client
-	resp, err := volumeServerHTTPClient.Do(req)
+	resp, err := fetchVolumeServerWithRetry(ctx, "get_chunk_full", func() (*http.Request, error) {
+		req, reqErr := http.NewRequestWithContext(ctx, "GET", chunkUrl, nil)
+		if reqErr != nil {
+			return nil, fmt.Errorf("failed to create request: %w", reqErr)
+		}
+		if jwt != "" {
+			req.Header.Set("Authorization", security.BearerPrefix+jwt)
+		}
+		return req, nil
+	}, func(statusCode int) bool {
+		return statusCode == http.StatusOK
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch chunk: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, fmt.Errorf("unexpected status code %d for chunk %s", resp.StatusCode, fileId)
 	}
 
 	return resp.Body, nil
@@ -1863,33 +2000,26 @@ func (s3a *S3ApiServer) fetchChunkViewData(ctx context.Context, chunkView *filer
 	// Generate JWT for volume server authentication (uses config loaded once at startup)
 	jwt := filer.JwtForVolumeServer(chunkView.FileId)
 
-	// Create request with Range header for the chunk view
-	// chunkUrl already contains the complete URL including fileId
-	req, err := http.NewRequestWithContext(ctx, "GET", chunkUrl, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
-
-	// Set Range header to fetch only the needed portion of the chunk
-	if !chunkView.IsFullChunk() {
-		rangeEnd := chunkView.OffsetInChunk + int64(chunkView.ViewSize) - 1
-		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", chunkView.OffsetInChunk, rangeEnd))
-	}
-
-	// Set JWT for authentication
-	if jwt != "" {
-		req.Header.Set("Authorization", security.BearerPrefix+jwt)
-	}
-
-	// Use shared HTTP client with connection pooling
-	resp, err := volumeServerHTTPClient.Do(req)
+	resp, err := fetchVolumeServerWithRetry(ctx, "get_chunk_view", func() (*http.Request, error) {
+		// chunkUrl already contains the complete URL including fileId
+		req, reqErr := http.NewRequestWithContext(ctx, "GET", chunkUrl, nil)
+		if reqErr != nil {
+			return nil, fmt.Errorf("failed to create request: %w", reqErr)
+		}
+		// Set Range header to fetch only the needed portion of the chunk
+		if !chunkView.IsFullChunk() {
+			rangeEnd := chunkView.OffsetInChunk + int64(chunkView.ViewSize) - 1
+			req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", chunkView.OffsetInChunk, rangeEnd))
+		}
+		if jwt != "" {
+			req.Header.Set("Authorization", security.BearerPrefix+jwt)
+		}
+		return req, nil
+	}, func(statusCode int) bool {
+		return statusCode == http.StatusOK || statusCode == http.StatusPartialContent
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch chunk: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
-		resp.Body.Close()
-		return nil, fmt.Errorf("unexpected status code %d for chunk %s", resp.StatusCode, chunkView.FileId)
 	}
 
 	return resp.Body, nil
@@ -1927,7 +2057,7 @@ func (s3a *S3ApiServer) getEncryptedStreamFromVolumes(ctx context.Context, entry
 		0,
 		totalSize,
 		0,
-		4, // prefetch 4 chunks ahead for overlapped fetching
+		s3a.getDownloadChunkPrefetch(),
 	)
 	if err != nil {
 		return nil, err

@@ -672,6 +672,57 @@ var (
 			Buckets:   []float64{1024, 102400, 1048576, 16777216, 67108864, 268435456, 1073741824, 4294967296},
 		}, []string{"bucket"})
 
+	S3GetObjectStageHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: Namespace,
+			Subsystem: subsystemS3,
+			Name:      "get_object_stage_seconds",
+			Help:      "Bucketed histogram of S3 getObject streaming stage durations.",
+			Buckets:   prometheus.ExponentialBuckets(0.0001, 2, 24),
+		}, []string{"stage", "bucket"})
+
+	S3GetObjectResultCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: Namespace,
+			Subsystem: subsystemS3,
+			Name:      "get_object_result_total",
+			Help:      "Counter of S3 getObject streaming outcomes.",
+		}, []string{"result", "bucket"})
+
+	S3GetObjectDownloadedBytesHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: Namespace,
+			Subsystem: subsystemS3,
+			Name:      "get_object_downloaded_bytes",
+			Help:      "Histogram of object bytes sent via S3 GET streaming path.",
+			Buckets:   []float64{1024, 102400, 1048576, 16777216, 67108864, 268435456, 1073741824, 4294967296},
+		}, []string{"bucket"})
+
+	S3MetadataStageHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: Namespace,
+			Subsystem: subsystemS3,
+			Name:      "metadata_stage_seconds",
+			Help:      "Bucketed histogram of S3 metadata/listing stage durations.",
+			Buckets:   prometheus.ExponentialBuckets(0.0001, 2, 24),
+		}, []string{"operation", "stage", "bucket"})
+
+	S3MetadataResultCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: Namespace,
+			Subsystem: subsystemS3,
+			Name:      "metadata_result_total",
+			Help:      "Counter of S3 metadata/listing operation outcomes.",
+		}, []string{"operation", "result", "bucket"})
+
+	S3ReliabilityEventCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: Namespace,
+			Subsystem: subsystemS3,
+			Name:      "reliability_event_total",
+			Help:      "Counter of S3 reliability events (retry, timeout, rate-limit, exhausted).",
+		}, []string{"operation", "event"})
+
 	S3BucketSizeBytesGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: Namespace,
@@ -979,6 +1030,12 @@ func init() {
 	Gather.MustRegister(S3PutToFilerChunkCountHistogram)
 	Gather.MustRegister(S3PutToFilerResultCounter)
 	Gather.MustRegister(S3PutToFilerUploadedBytesHistogram)
+	Gather.MustRegister(S3GetObjectStageHistogram)
+	Gather.MustRegister(S3GetObjectResultCounter)
+	Gather.MustRegister(S3GetObjectDownloadedBytesHistogram)
+	Gather.MustRegister(S3MetadataStageHistogram)
+	Gather.MustRegister(S3MetadataResultCounter)
+	Gather.MustRegister(S3ReliabilityEventCounter)
 	Gather.MustRegister(S3BucketSizeBytesGauge)
 	Gather.MustRegister(S3BucketPhysicalSizeBytesGauge)
 	Gather.MustRegister(S3BucketObjectCountGauge)
@@ -1081,6 +1138,11 @@ func DeleteBucketMetrics(bucket string) {
 	c += S3PutToFilerChunkCountHistogram.DeletePartialMatch(labels)
 	c += S3PutToFilerResultCounter.DeletePartialMatch(labels)
 	c += S3PutToFilerUploadedBytesHistogram.DeletePartialMatch(labels)
+	c += S3GetObjectStageHistogram.DeletePartialMatch(labels)
+	c += S3GetObjectResultCounter.DeletePartialMatch(labels)
+	c += S3GetObjectDownloadedBytesHistogram.DeletePartialMatch(labels)
+	c += S3MetadataStageHistogram.DeletePartialMatch(labels)
+	c += S3MetadataResultCounter.DeletePartialMatch(labels)
 	c += S3BucketSizeBytesGauge.DeletePartialMatch(labels)
 	c += S3BucketPhysicalSizeBytesGauge.DeletePartialMatch(labels)
 	c += S3BucketObjectCountGauge.DeletePartialMatch(labels)
@@ -1135,6 +1197,9 @@ func bucketMetricTTLControl() {
 			c += S3PutToFilerAssignBatchSizeHistogram.DeletePartialMatch(labels)
 			c += S3PutToFilerChunkCountHistogram.DeletePartialMatch(labels)
 			c += S3PutToFilerUploadedBytesHistogram.DeletePartialMatch(labels)
+			c += S3GetObjectStageHistogram.DeletePartialMatch(labels)
+			c += S3GetObjectDownloadedBytesHistogram.DeletePartialMatch(labels)
+			c += S3MetadataStageHistogram.DeletePartialMatch(labels)
 			c += S3BucketSizeBytesGauge.DeletePartialMatch(labels)
 			c += S3BucketPhysicalSizeBytesGauge.DeletePartialMatch(labels)
 			c += S3BucketObjectCountGauge.DeletePartialMatch(labels)

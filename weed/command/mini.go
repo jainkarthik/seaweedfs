@@ -510,6 +510,8 @@ func initMiniS3Flags() {
 	miniS3Options.concurrentFileUploadLimit = cmdMini.Flag.Int("s3.concurrentFileUploadLimit", 0, "limit number of concurrent file uploads")
 	miniS3Options.uploadChunkParallelism = cmdMini.Flag.Int("s3.uploadChunkParallelism", 4, "number of in-flight S3 upload chunks per object")
 	miniS3Options.uploadChunkSizeMB = cmdMini.Flag.Int("s3.uploadChunkSizeMB", 8, "chunk size in MB used for internal S3 upload chunking")
+	miniS3Options.downloadChunkPrefetch = cmdMini.Flag.Int("s3.downloadChunkPrefetch", 4, "number of chunks to prefetch per S3 GET/read stream")
+	miniS3Options.downloadCopyBufferKB = cmdMini.Flag.Int("s3.downloadCopyBufferKB", 256, "copy buffer size in KB used for S3 GET/read streaming")
 	miniS3Options.enableIam = cmdMini.Flag.Bool("s3.iam", true, "enable embedded IAM API on the same port")
 	miniS3Options.iamReadOnly = miniS3IamReadOnly
 	miniS3Options.dataCenter = cmdMini.Flag.String("s3.dataCenter", "", "prefer to read and write to volumes in this data center")

@@ -31,6 +31,19 @@ const (
 	maxPartsList           = 10000 // Limit number of parts in a listPartsResponse.
 )
 
+func observeMultipartStage(operation, stage, bucket string, start time.Time) {
+	stats_collect.S3MetadataStageHistogram.WithLabelValues(operation, stage, bucket).Observe(time.Since(start).Seconds())
+}
+
+func recordMultipartResult(operation, bucket string, start time.Time, code s3err.ErrorCode) {
+	observeMultipartStage(operation, "total", bucket, start)
+	result := "success"
+	if code != s3err.ErrNone {
+		result = "error"
+	}
+	stats_collect.S3MetadataResultCounter.WithLabelValues(operation, result, bucket).Inc()
+}
+
 // NewMultipartUploadHandler - New multipart upload.
 func (s3a *S3ApiServer) NewMultipartUploadHandler(w http.ResponseWriter, r *http.Request) {
 	bucket, object := s3_constants.GetBucketAndObject(r)
@@ -129,28 +142,40 @@ func (s3a *S3ApiServer) CompleteMultipartUploadHandler(w http.ResponseWriter, r 
 	// https://docs.aws.amazon.com/AmazonS3/latest/API/API_CompleteMultipartUpload.html
 
 	bucket, object := s3_constants.GetBucketAndObject(r)
+	start := time.Now()
+	code := s3err.ErrNone
+	defer func() {
+		recordMultipartResult("multipart_complete", bucket, start, code)
+	}()
 
 	// Check if bucket exists before completing multipart upload
 	if err := s3a.checkBucket(r, bucket); err != s3err.ErrNone {
-		s3err.WriteErrorResponse(w, r, err)
+		code = err
+		s3err.WriteErrorResponse(w, r, code)
 		return
 	}
 	if err := s3a.validateTableBucketObjectPath(bucket, object); err != nil {
-		s3err.WriteErrorResponse(w, r, s3err.ErrAccessDenied)
+		code = s3err.ErrAccessDenied
+		s3err.WriteErrorResponse(w, r, code)
 		return
 	}
 
 	parts := &CompleteMultipartUpload{}
+	tDecode := time.Now()
 	if err := xmlDecoder(r.Body, parts, r.ContentLength); err != nil {
-		s3err.WriteErrorResponse(w, r, s3err.ErrMalformedXML)
+		observeMultipartStage("multipart_complete", "decode_xml", bucket, tDecode)
+		code = s3err.ErrMalformedXML
+		s3err.WriteErrorResponse(w, r, code)
 		return
 	}
+	observeMultipartStage("multipart_complete", "decode_xml", bucket, tDecode)
 
 	// Get upload id.
 	uploadID, _, _, _ := getObjectResources(r.URL.Query())
 	err := s3a.checkUploadId(object, uploadID)
 	if err != nil {
-		s3err.WriteErrorResponse(w, r, s3err.ErrNoSuchUpload)
+		code = s3err.ErrNoSuchUpload
+		s3err.WriteErrorResponse(w, r, code)
 		return
 	}
 
@@ -158,20 +183,24 @@ func (s3a *S3ApiServer) CompleteMultipartUploadHandler(w http.ResponseWriter, r 
 	// This implements AWS S3 behavior where conditional headers apply to CompleteMultipartUpload
 	if errCode := s3a.checkConditionalHeaders(r, bucket, object); errCode != s3err.ErrNone {
 		glog.V(3).Infof("CompleteMultipartUploadHandler: Conditional header check failed for %s/%s", bucket, object)
-		s3err.WriteErrorResponse(w, r, errCode)
+		code = errCode
+		s3err.WriteErrorResponse(w, r, code)
 		return
 	}
 
+	tComplete := time.Now()
 	response, errCode := s3a.completeMultipartUpload(r, &s3.CompleteMultipartUploadInput{
 		Bucket:   aws.String(bucket),
 		Key:      objectKey(aws.String(object)),
 		UploadId: aws.String(uploadID),
 	}, parts)
+	observeMultipartStage("multipart_complete", "complete_call", bucket, tComplete)
 
 	glog.V(3).Info("CompleteMultipartUploadHandler", string(s3err.EncodeXMLResponse(response)), errCode)
 
 	if errCode != s3err.ErrNone {
-		s3err.WriteErrorResponse(w, r, errCode)
+		code = errCode
+		s3err.WriteErrorResponse(w, r, code)
 		return
 	}
 
@@ -188,7 +217,9 @@ func (s3a *S3ApiServer) CompleteMultipartUploadHandler(w http.ResponseWriter, r 
 	stats_collect.RecordBucketActiveTime(bucket)
 	stats_collect.S3UploadedObjectsCounter.WithLabelValues(bucket).Inc()
 
+	tWrite := time.Now()
 	writeSuccessResponseXML(w, r, response)
+	observeMultipartStage("multipart_complete", "response_write", bucket, tWrite)
 
 }
 
@@ -236,26 +267,37 @@ func (s3a *S3ApiServer) AbortMultipartUploadHandler(w http.ResponseWriter, r *ht
 // ListMultipartUploadsHandler - Lists multipart uploads.
 func (s3a *S3ApiServer) ListMultipartUploadsHandler(w http.ResponseWriter, r *http.Request) {
 	bucket, _ := s3_constants.GetBucketAndObject(r)
+	start := time.Now()
+	code := s3err.ErrNone
+	defer func() {
+		recordMultipartResult("multipart_list_uploads", bucket, start, code)
+	}()
 
 	// Check if bucket exists before listing multipart uploads
 	if err := s3a.checkBucket(r, bucket); err != s3err.ErrNone {
-		s3err.WriteErrorResponse(w, r, err)
+		code = err
+		s3err.WriteErrorResponse(w, r, code)
 		return
 	}
 
+	tParse := time.Now()
 	prefix, keyMarker, uploadIDMarker, delimiter, maxUploads, encodingType := getBucketMultipartResources(r.URL.Query())
+	observeMultipartStage("multipart_list_uploads", "parse_args", bucket, tParse)
 	if maxUploads < 0 {
-		s3err.WriteErrorResponse(w, r, s3err.ErrInvalidMaxUploads)
+		code = s3err.ErrInvalidMaxUploads
+		s3err.WriteErrorResponse(w, r, code)
 		return
 	}
 	if keyMarker != "" {
 		// Marker not common with prefix is not implemented.
 		if !strings.HasPrefix(keyMarker, prefix) {
-			s3err.WriteErrorResponse(w, r, s3err.ErrNotImplemented)
+			code = s3err.ErrNotImplemented
+			s3err.WriteErrorResponse(w, r, code)
 			return
 		}
 	}
 
+	tList := time.Now()
 	response, errCode := s3a.listMultipartUploads(&s3.ListMultipartUploadsInput{
 		Bucket:         aws.String(bucket),
 		Delimiter:      aws.String(delimiter),
@@ -265,45 +307,61 @@ func (s3a *S3ApiServer) ListMultipartUploadsHandler(w http.ResponseWriter, r *ht
 		Prefix:         aws.String(prefix),
 		UploadIdMarker: aws.String(uploadIDMarker),
 	})
+	observeMultipartStage("multipart_list_uploads", "list_call", bucket, tList)
 
 	glog.V(3).Infof("ListMultipartUploadsHandler %s errCode=%d", string(s3err.EncodeXMLResponse(response)), errCode)
 
 	if errCode != s3err.ErrNone {
-		s3err.WriteErrorResponse(w, r, errCode)
+		code = errCode
+		s3err.WriteErrorResponse(w, r, code)
 		return
 	}
 
 	// TODO handle encodingType
 
+	tWrite := time.Now()
 	writeSuccessResponseXML(w, r, response)
+	observeMultipartStage("multipart_list_uploads", "response_write", bucket, tWrite)
 }
 
 // ListObjectPartsHandler - Lists object parts in a multipart upload.
 func (s3a *S3ApiServer) ListObjectPartsHandler(w http.ResponseWriter, r *http.Request) {
 	bucket, object := s3_constants.GetBucketAndObject(r)
+	start := time.Now()
+	code := s3err.ErrNone
+	defer func() {
+		recordMultipartResult("multipart_list_parts", bucket, start, code)
+	}()
 
 	// Check if bucket exists before listing object parts
 	if err := s3a.checkBucket(r, bucket); err != s3err.ErrNone {
-		s3err.WriteErrorResponse(w, r, err)
+		code = err
+		s3err.WriteErrorResponse(w, r, code)
 		return
 	}
 
+	tParse := time.Now()
 	uploadID, partNumberMarker, maxParts, _ := getObjectResources(r.URL.Query())
+	observeMultipartStage("multipart_list_parts", "parse_args", bucket, tParse)
 	if partNumberMarker < 0 {
-		s3err.WriteErrorResponse(w, r, s3err.ErrInvalidPartNumberMarker)
+		code = s3err.ErrInvalidPartNumberMarker
+		s3err.WriteErrorResponse(w, r, code)
 		return
 	}
 	if maxParts < 0 {
-		s3err.WriteErrorResponse(w, r, s3err.ErrInvalidMaxParts)
+		code = s3err.ErrInvalidMaxParts
+		s3err.WriteErrorResponse(w, r, code)
 		return
 	}
 
 	err := s3a.checkUploadId(object, uploadID)
 	if err != nil {
-		s3err.WriteErrorResponse(w, r, s3err.ErrNoSuchUpload)
+		code = s3err.ErrNoSuchUpload
+		s3err.WriteErrorResponse(w, r, code)
 		return
 	}
 
+	tList := time.Now()
 	response, errCode := s3a.listObjectParts(&s3.ListPartsInput{
 		Bucket:           aws.String(bucket),
 		Key:              objectKey(aws.String(object)),
@@ -311,15 +369,19 @@ func (s3a *S3ApiServer) ListObjectPartsHandler(w http.ResponseWriter, r *http.Re
 		PartNumberMarker: aws.Int64(int64(partNumberMarker)),
 		UploadId:         aws.String(uploadID),
 	})
+	observeMultipartStage("multipart_list_parts", "list_call", bucket, tList)
 
 	if errCode != s3err.ErrNone {
-		s3err.WriteErrorResponse(w, r, errCode)
+		code = errCode
+		s3err.WriteErrorResponse(w, r, code)
 		return
 	}
 
 	glog.V(3).Infof("ListObjectPartsHandler %s count=%d", string(s3err.EncodeXMLResponse(response)), len(response.Part))
 
+	tWrite := time.Now()
 	writeSuccessResponseXML(w, r, response)
+	observeMultipartStage("multipart_list_parts", "response_write", bucket, tWrite)
 
 }
 

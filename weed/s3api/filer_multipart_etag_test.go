@@ -68,9 +68,9 @@ func TestCalculateMultipartETagUsesStoredPartETags(t *testing.T) {
 	computedPart1 := "cccccccccccccccccccccccccccccccc"
 	computedPart2 := "dddddddddddddddddddddddddddddddd"
 
-	partEntries := map[int][]*filer_pb.Entry{
-		1: {newMultipartETagTestEntry(t, "0001.part", storedPart1, computedPart1)},
-		2: {newMultipartETagTestEntry(t, "0002.part", storedPart2, computedPart2)},
+	partEntries := map[int]*filer_pb.Entry{
+		1: newMultipartETagTestEntry(t, "0001.part", storedPart1, computedPart1),
+		2: newMultipartETagTestEntry(t, "0002.part", storedPart2, computedPart2),
 	}
 
 	got := calculateMultipartETag(partEntries, []int{1, 2})

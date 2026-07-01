@@ -59,6 +59,8 @@ type S3ApiServerOption struct {
 	ConcurrentFileUploadLimit int64
 	UploadChunkParallelism    int
 	UploadChunkSizeMB         int
+	DownloadChunkPrefetch     int
+	DownloadCopyBufferKB      int
 	EnableIam                 bool // Enable embedded IAM API on the same port
 	IamReadOnly               bool // Disable IAM write operations on this server
 	Cipher                    bool // encrypt data on volume servers
@@ -123,7 +125,51 @@ type objectWriteLock interface {
 
 const (
 	objectWriteLockTTL = 15 * time.Second
+
+	defaultUploadChunkParallelism = 4
+	defaultUploadChunkSizeMB      = 8
+	defaultDownloadChunkPrefetch  = 4
+	defaultDownloadCopyBufferKB   = 256
+
+	maxUploadChunkParallelism = 128
+	maxUploadChunkSizeMB      = 1024
+	maxDownloadChunkPrefetch  = 64
+	maxDownloadCopyBufferKB   = 4096
 )
+
+func normalizeThroughputOptions(option *S3ApiServerOption) {
+	if option.UploadChunkParallelism <= 0 {
+		glog.Warningf("invalid s3 upload chunk parallelism %d, using default %d", option.UploadChunkParallelism, defaultUploadChunkParallelism)
+		option.UploadChunkParallelism = defaultUploadChunkParallelism
+	} else if option.UploadChunkParallelism > maxUploadChunkParallelism {
+		glog.Warningf("s3 upload chunk parallelism %d exceeds max %d, clamping", option.UploadChunkParallelism, maxUploadChunkParallelism)
+		option.UploadChunkParallelism = maxUploadChunkParallelism
+	}
+
+	if option.UploadChunkSizeMB <= 0 {
+		glog.Warningf("invalid s3 upload chunk size %dMB, using default %dMB", option.UploadChunkSizeMB, defaultUploadChunkSizeMB)
+		option.UploadChunkSizeMB = defaultUploadChunkSizeMB
+	} else if option.UploadChunkSizeMB > maxUploadChunkSizeMB {
+		glog.Warningf("s3 upload chunk size %dMB exceeds max %dMB, clamping", option.UploadChunkSizeMB, maxUploadChunkSizeMB)
+		option.UploadChunkSizeMB = maxUploadChunkSizeMB
+	}
+
+	if option.DownloadChunkPrefetch <= 0 {
+		glog.Warningf("invalid s3 download chunk prefetch %d, using default %d", option.DownloadChunkPrefetch, defaultDownloadChunkPrefetch)
+		option.DownloadChunkPrefetch = defaultDownloadChunkPrefetch
+	} else if option.DownloadChunkPrefetch > maxDownloadChunkPrefetch {
+		glog.Warningf("s3 download chunk prefetch %d exceeds max %d, clamping", option.DownloadChunkPrefetch, maxDownloadChunkPrefetch)
+		option.DownloadChunkPrefetch = maxDownloadChunkPrefetch
+	}
+
+	if option.DownloadCopyBufferKB <= 0 {
+		glog.Warningf("invalid s3 download copy buffer %dKB, using default %dKB", option.DownloadCopyBufferKB, defaultDownloadCopyBufferKB)
+		option.DownloadCopyBufferKB = defaultDownloadCopyBufferKB
+	} else if option.DownloadCopyBufferKB > maxDownloadCopyBufferKB {
+		glog.Warningf("s3 download copy buffer %dKB exceeds max %dKB, clamping", option.DownloadCopyBufferKB, maxDownloadCopyBufferKB)
+		option.DownloadCopyBufferKB = maxDownloadCopyBufferKB
+	}
+}
 
 func NewS3ApiServer(router *mux.Router, option *S3ApiServerOption) (s3ApiServer *S3ApiServer, err error) {
 	return NewS3ApiServerWithStore(router, option, "")
@@ -133,6 +179,7 @@ func NewS3ApiServerWithStore(router *mux.Router, option *S3ApiServerOption, expl
 	if len(option.Filers) == 0 {
 		return nil, fmt.Errorf("at least one filer address is required")
 	}
+	normalizeThroughputOptions(option)
 
 	startTsNs := time.Now().UnixNano()
 

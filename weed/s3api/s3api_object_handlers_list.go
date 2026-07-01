@@ -11,17 +11,41 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/seaweedfs/seaweedfs/weed/glog"
 	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
 	"github.com/seaweedfs/seaweedfs/weed/s3api/s3_constants"
 	"github.com/seaweedfs/seaweedfs/weed/s3api/s3err"
+	stats_collect "github.com/seaweedfs/seaweedfs/weed/stats"
 )
 
 type OptionalString struct {
 	string
 	set bool
+}
+
+func observeMetadataStage(operation, stage, bucket string, start time.Time) {
+	stats_collect.S3MetadataStageHistogram.WithLabelValues(operation, stage, bucket).Observe(time.Since(start).Seconds())
+}
+
+func recordMetadataResult(operation, bucket string, start time.Time, code s3err.ErrorCode) {
+	observeMetadataStage(operation, "total", bucket, start)
+	result := "success"
+	if code != s3err.ErrNone {
+		result = "error"
+	}
+	stats_collect.S3MetadataResultCounter.WithLabelValues(operation, result, bucket).Inc()
+}
+
+func appendCommonPrefix(commonPrefixes *[]PrefixEntry, seen map[string]struct{}, prefix string) bool {
+	if _, found := seen[prefix]; found {
+		return false
+	}
+	seen[prefix] = struct{}{}
+	*commonPrefixes = append(*commonPrefixes, PrefixEntry{Prefix: prefix})
+	return true
 }
 
 func (o OptionalString) MarshalXML(e *xml.Encoder, startElement xml.StartElement) error {
@@ -84,12 +108,20 @@ func (s3a *S3ApiServer) ListObjectsV2Handler(w http.ResponseWriter, r *http.Requ
 
 	// collect parameters
 	bucket, _ := s3_constants.GetBucketAndObject(r)
+	requestStart := time.Now()
+	code := s3err.ErrNone
+	defer func() {
+		recordMetadataResult("list_v2", bucket, requestStart, code)
+	}()
+	tArgs := time.Now()
 	originalPrefix, startAfter, delimiter, continuationToken, encodingTypeUrl, fetchOwner, maxKeys, allowUnordered, errCode := getListObjectsV2Args(r.URL.Query())
+	observeMetadataStage("list_v2", "parse_args", bucket, tArgs)
 
 	glog.V(2).Infof("ListObjectsV2Handler bucket=%s prefix=%s marker=%s", bucket, originalPrefix, continuationToken.string)
 
 	if errCode != s3err.ErrNone {
-		s3err.WriteErrorResponse(w, r, errCode)
+		code = errCode
+		s3err.WriteErrorResponse(w, r, code)
 		return
 	}
 
@@ -97,7 +129,8 @@ func (s3a *S3ApiServer) ListObjectsV2Handler(w http.ResponseWriter, r *http.Requ
 
 	// AWS S3 compatibility: allow-unordered cannot be used with delimiter
 	if allowUnordered && delimiter != "" {
-		s3err.WriteErrorResponse(w, r, s3err.ErrInvalidUnorderedWithDelimiter)
+		code = s3err.ErrInvalidUnorderedWithDelimiter
+		s3err.WriteErrorResponse(w, r, code)
 		return
 	}
 
@@ -109,18 +142,25 @@ func (s3a *S3ApiServer) ListObjectsV2Handler(w http.ResponseWriter, r *http.Requ
 	// Adjust marker if it ends with delimiter to skip all entries with that prefix
 	marker = adjustMarkerForDelimiter(marker, delimiter)
 
+	tList := time.Now()
 	response, err := s3a.listFilerEntries(r.Context(), bucket, originalPrefix, maxKeys, marker, delimiter, encodingTypeUrl, fetchOwner)
+	observeMetadataStage("list_v2", "list_filer_entries", bucket, tList)
 
 	if err != nil {
-		s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
+		code = s3err.ErrInternalError
+		s3err.WriteErrorResponse(w, r, code)
 		return
 	}
 
 	if len(response.Contents) == 0 {
+		tBucketExists := time.Now()
 		if exists, existErr := s3a.bucketExists(bucket); existErr == nil && !exists {
-			s3err.WriteErrorResponse(w, r, s3err.ErrNoSuchBucket)
+			observeMetadataStage("list_v2", "bucket_exists_probe", bucket, tBucketExists)
+			code = s3err.ErrNoSuchBucket
+			s3err.WriteErrorResponse(w, r, code)
 			return
 		}
+		observeMetadataStage("list_v2", "bucket_exists_probe", bucket, tBucketExists)
 	}
 
 	responseV2 := &ListBucketResultV2{
@@ -141,7 +181,9 @@ func (s3a *S3ApiServer) ListObjectsV2Handler(w http.ResponseWriter, r *http.Requ
 	}
 
 	glog.V(3).Infof("ListObjectsV2Handler response: %+v", responseV2)
+	tWrite := time.Now()
 	writeSuccessResponseXML(w, r, responseV2)
+	observeMetadataStage("list_v2", "response_write", bucket, tWrite)
 }
 
 func (s3a *S3ApiServer) ListObjectsV1Handler(w http.ResponseWriter, r *http.Request) {
@@ -150,46 +192,65 @@ func (s3a *S3ApiServer) ListObjectsV1Handler(w http.ResponseWriter, r *http.Requ
 
 	// collect parameters
 	bucket, _ := s3_constants.GetBucketAndObject(r)
+	requestStart := time.Now()
+	code := s3err.ErrNone
+	defer func() {
+		recordMetadataResult("list_v1", bucket, requestStart, code)
+	}()
+	tArgs := time.Now()
 	originalPrefix, marker, delimiter, encodingTypeUrl, maxKeys, allowUnordered, errCode := getListObjectsV1Args(r.URL.Query())
+	observeMetadataStage("list_v1", "parse_args", bucket, tArgs)
 
 	glog.V(2).Infof("ListObjectsV1Handler bucket=%s prefix=%s marker=%s delimiter=%s maxKeys=%d", bucket, originalPrefix, marker, delimiter, maxKeys)
 
 	if errCode != s3err.ErrNone {
-		s3err.WriteErrorResponse(w, r, errCode)
+		code = errCode
+		s3err.WriteErrorResponse(w, r, code)
 		return
 	}
 
 	if maxKeys < 0 {
-		s3err.WriteErrorResponse(w, r, s3err.ErrInvalidMaxKeys)
+		code = s3err.ErrInvalidMaxKeys
+		s3err.WriteErrorResponse(w, r, code)
 		return
 	}
 
 	// AWS S3 compatibility: allow-unordered cannot be used with delimiter
 	if allowUnordered && delimiter != "" {
-		s3err.WriteErrorResponse(w, r, s3err.ErrInvalidUnorderedWithDelimiter)
+		code = s3err.ErrInvalidUnorderedWithDelimiter
+		s3err.WriteErrorResponse(w, r, code)
 		return
 	}
 
 	// Adjust marker if it ends with delimiter to skip all entries with that prefix
 	marker = adjustMarkerForDelimiter(marker, delimiter)
 
+	tList := time.Now()
 	response, err := s3a.listFilerEntries(r.Context(), bucket, originalPrefix, uint16(maxKeys), marker, delimiter, encodingTypeUrl, true)
+	observeMetadataStage("list_v1", "list_filer_entries", bucket, tList)
 
 	if err != nil {
-		s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
+		code = s3err.ErrInternalError
+		s3err.WriteErrorResponse(w, r, code)
 		return
 	}
 	sanitizeV1MarkerEcho(&response, marker, encodingTypeUrl)
 
 	if len(response.Contents) == 0 {
+		tBucketExists := time.Now()
 		if exists, existErr := s3a.bucketExists(bucket); existErr == nil && !exists {
-			s3err.WriteErrorResponse(w, r, s3err.ErrNoSuchBucket)
+			observeMetadataStage("list_v1", "bucket_exists_probe", bucket, tBucketExists)
+			code = s3err.ErrNoSuchBucket
+			s3err.WriteErrorResponse(w, r, code)
 			return
 		}
+		observeMetadataStage("list_v1", "bucket_exists_probe", bucket, tBucketExists)
 	}
 
 	glog.V(3).Infof("ListObjectsV1Handler response: %+v", response)
+	tWrite := time.Now()
 	writeSuccessResponseXML(w, r, toListBucketResultV1(response))
+	observeMetadataStage("list_v1", "response_write", bucket, tWrite)
 }
 
 func sanitizeV1MarkerEcho(response *ListBucketResult, marker string, encodingTypeUrl bool) {
@@ -273,6 +334,7 @@ func (s3a *S3ApiServer) listFilerEntries(ctx context.Context, bucket string, ori
 	err = s3a.WithFilerClient(false, func(client filer_pb.SeaweedFilerClient) error {
 		var lastEntryWasCommonPrefix bool
 		var lastCommonPrefixName string
+		seenCommonPrefixes := make(map[string]struct{})
 
 		// Hoist versioning check out of per-entry callback
 		versioningState, _ := s3a.getVersioningState(bucket)
@@ -328,12 +390,7 @@ func (s3a *S3ApiServer) listFilerEntries(ctx context.Context, bucket string, ori
 							// S3 clients expect the delimited prefix to contain the delimiter and prefix.
 							delimitedPrefix := originalPrefix + delimitedPath[0] + delimiter
 
-							// Check if this CommonPrefix already exists
-							if !lastEntryWasCommonPrefix || lastCommonPrefixName != delimitedPath[0] {
-								// New CommonPrefix found
-								commonPrefixes = append(commonPrefixes, PrefixEntry{
-									Prefix: delimitedPrefix,
-								})
+							if appendCommonPrefix(&commonPrefixes, seenCommonPrefixes, delimitedPrefix) {
 								cursor.maxKeys--
 								delimiterFound = true
 								lastEntryWasCommonPrefix = true
@@ -359,13 +416,13 @@ func (s3a *S3ApiServer) listFilerEntries(ctx context.Context, bucket string, ori
 					} else if delimiter != "" { // A response can contain CommonPrefixes only if you specify a delimiter.
 						// Use raw dir and entry.Name (not encoded) to ensure consistent handling
 						// Encoding will be applied after sorting if encodingTypeUrl is set
-						commonPrefixes = append(commonPrefixes, PrefixEntry{
-							Prefix: fmt.Sprintf("%s/%s/", dir, entry.Name)[len(bucketPrefix):],
-						})
-						//All of the keys (up to 1,000) rolled up into a common prefix count as a single return when calculating the number of returns.
-						cursor.maxKeys--
-						lastEntryWasCommonPrefix = true
-						lastCommonPrefixName = entry.Name
+						delimitedPrefix := fmt.Sprintf("%s/%s/", dir, entry.Name)[len(bucketPrefix):]
+						if appendCommonPrefix(&commonPrefixes, seenCommonPrefixes, delimitedPrefix) {
+							//All of the keys (up to 1,000) rolled up into a common prefix count as a single return when calculating the number of returns.
+							cursor.maxKeys--
+							lastEntryWasCommonPrefix = true
+							lastCommonPrefixName = entry.Name
+						}
 					}
 				} else {
 					var delimiterFound bool
@@ -383,17 +440,7 @@ func (s3a *S3ApiServer) listFilerEntries(ctx context.Context, bucket string, ori
 							// S3 clients expect the delimited prefix to contain the delimiter and prefix.
 							delimitedPrefix := originalPrefix + delimitedPath[0] + delimiter
 
-							for i := range commonPrefixes {
-								if commonPrefixes[i].Prefix == delimitedPrefix {
-									delimiterFound = true
-									break
-								}
-							}
-
-							if !delimiterFound {
-								commonPrefixes = append(commonPrefixes, PrefixEntry{
-									Prefix: delimitedPrefix,
-								})
+							if appendCommonPrefix(&commonPrefixes, seenCommonPrefixes, delimitedPrefix) {
 								cursor.maxKeys--
 								delimiterFound = true
 								lastEntryWasCommonPrefix = true

@@ -66,6 +66,8 @@ type S3Options struct {
 	concurrentFileUploadLimit *int
 	uploadChunkParallelism    *int
 	uploadChunkSizeMB         *int
+	downloadChunkPrefetch     *int
+	downloadCopyBufferKB      *int
 	enableIam                 *bool
 	iamReadOnly               *bool
 	debug                     *bool
@@ -110,6 +112,8 @@ func init() {
 	s3StandaloneOptions.concurrentFileUploadLimit = cmdS3.Flag.Int("concurrentFileUploadLimit", 0, "limit number of concurrent file uploads, 0 means unlimited")
 	s3StandaloneOptions.uploadChunkParallelism = cmdS3.Flag.Int("uploadChunkParallelism", 4, "number of in-flight S3 upload chunks per object")
 	s3StandaloneOptions.uploadChunkSizeMB = cmdS3.Flag.Int("uploadChunkSizeMB", 8, "chunk size in MB used for internal S3 upload chunking")
+	s3StandaloneOptions.downloadChunkPrefetch = cmdS3.Flag.Int("downloadChunkPrefetch", 4, "number of chunks to prefetch per S3 GET/read stream")
+	s3StandaloneOptions.downloadCopyBufferKB = cmdS3.Flag.Int("downloadCopyBufferKB", 256, "copy buffer size in KB used for S3 GET/read streaming")
 	s3StandaloneOptions.enableIam = cmdS3.Flag.Bool("iam", true, "enable embedded IAM API on the same port")
 	s3StandaloneOptions.iamReadOnly = cmdS3.Flag.Bool("iam.readOnly", true, "disable IAM write operations on this server")
 	s3StandaloneOptions.debug = cmdS3.Flag.Bool("debug", false, "serves runtime profiling data via pprof on the port specified by -debug.port")
@@ -355,6 +359,8 @@ func (s3opt *S3Options) startS3Server() bool {
 		ConcurrentFileUploadLimit: int64(*s3opt.concurrentFileUploadLimit),
 		UploadChunkParallelism:    *s3opt.uploadChunkParallelism,
 		UploadChunkSizeMB:         *s3opt.uploadChunkSizeMB,
+		DownloadChunkPrefetch:     *s3opt.downloadChunkPrefetch,
+		DownloadCopyBufferKB:      *s3opt.downloadCopyBufferKB,
 		EnableIam:                 *s3opt.enableIam, // Embedded IAM API (enabled by default)
 		IamReadOnly:               *s3opt.iamReadOnly,
 		Cipher:                    *s3opt.cipher, // encrypt data on volume servers

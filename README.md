@@ -123,13 +123,23 @@ For high-bandwidth single-copy deployments, tune S3 upload internals with:
 
 - `-s3.uploadChunkParallelism` (or `-uploadChunkParallelism` in standalone S3 mode), default `4`
 - `-s3.uploadChunkSizeMB` (or `-uploadChunkSizeMB` in standalone S3 mode), default `8`
+- `-s3.downloadChunkPrefetch` (or `-downloadChunkPrefetch` in standalone S3 mode), default `4`
+- `-s3.downloadCopyBufferKB` (or `-downloadCopyBufferKB` in standalone S3 mode), default `256`
 
 These control per-object in-flight chunk uploads and internal chunk size used by the S3 write path.
+Guardrail ranges are enforced at startup:
+
+- `uploadChunkParallelism`: `1..128` (fallback to `4` when invalid)
+- `uploadChunkSizeMB`: `1..1024` (fallback to `8` when invalid)
+- `downloadChunkPrefetch`: `1..64` (fallback to `4` when invalid)
+- `downloadCopyBufferKB`: `1..4096` (fallback to `256` when invalid)
 
 Rollback to safe defaults:
 
 - `uploadChunkParallelism=4`
 - `uploadChunkSizeMB=8`
+- `downloadChunkPrefetch=4`
+- `downloadCopyBufferKB=256`
 
 Related observability metrics include:
 
@@ -139,6 +149,20 @@ Related observability metrics include:
 - `SeaweedFS_s3_put_to_filer_chunk_count{bucket}`
 - `SeaweedFS_s3_put_to_filer_result_total{result,bucket}`
 - `SeaweedFS_s3_put_to_filer_uploaded_bytes{bucket}`
+- `SeaweedFS_s3_get_object_stage_seconds{stage,bucket}`
+- `SeaweedFS_s3_get_object_result_total{result,bucket}`
+- `SeaweedFS_s3_get_object_downloaded_bytes{bucket}`
+- `SeaweedFS_s3_metadata_stage_seconds{operation,stage,bucket}`
+- `SeaweedFS_s3_metadata_result_total{operation,result,bucket}`
+- `SeaweedFS_s3_reliability_event_total{operation,event}`
+
+Multipart control-path operations now emit metadata stage/result attribution through:
+
+- `operation="multipart_complete"` with stages: `decode_xml`, `complete_call`, `response_write`, `total`
+- `operation="multipart_list_parts"` with stages: `parse_args`, `list_call`, `response_write`, `total`
+- `operation="multipart_list_uploads"` with stages: `parse_args`, `list_call`, `response_write`, `total`
+
+Recent multipart completion optimization also removes repeated per-part re-sorting/reselection by selecting the latest part entry once and reusing it for final chunk assembly, multipart ETag/checksum calculation, and SSE header propagation.
 
 # Introduction #
 
