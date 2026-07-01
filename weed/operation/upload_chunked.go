@@ -37,8 +37,11 @@ type ChunkedUploadOption struct {
 	Jwt             security.EncodedJwt
 	MimeType        string
 	Cipher          bool // encrypt data on volume servers
-	AssignFunc      func(ctx context.Context, count int, expectedDataSize uint64) (*VolumeAssignRequest, *AssignResult, error)
-	UploadFunc      func(ctx context.Context, data []byte, option *UploadOption) (*UploadResult, error) // Optional: for testing
+	// MaxConcurrentChunks limits in-flight chunk uploads per object.
+	// If <= 0, UploadReaderInChunks uses the default (4).
+	MaxConcurrentChunks int
+	AssignFunc          func(ctx context.Context, count int, expectedDataSize uint64) (*VolumeAssignRequest, *AssignResult, error)
+	UploadFunc          func(ctx context.Context, data []byte, option *UploadOption) (*UploadResult, error) // Optional: for testing
 }
 
 var chunkBufferPool = sync.Pool{
@@ -62,7 +65,10 @@ func UploadReaderInChunks(ctx context.Context, reader io.Reader, opt *ChunkedUpl
 	var chunkOffset int64 = 0
 
 	var wg sync.WaitGroup
-	const bytesBufferCounter = 4
+	bytesBufferCounter := opt.MaxConcurrentChunks
+	if bytesBufferCounter <= 0 {
+		bytesBufferCounter = 4
+	}
 	bytesBufferLimitChan := make(chan struct{}, bytesBufferCounter)
 
 uploadLoop:

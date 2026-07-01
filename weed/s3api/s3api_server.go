@@ -57,6 +57,7 @@ type S3ApiServerOption struct {
 	IamConfig                 string // Advanced IAM configuration file path
 	ConcurrentUploadLimit     int64
 	ConcurrentFileUploadLimit int64
+	UploadChunkParallelism    int
 	EnableIam                 bool // Enable embedded IAM API on the same port
 	IamReadOnly               bool // Disable IAM write operations on this server
 	Cipher                    bool // encrypt data on volume servers

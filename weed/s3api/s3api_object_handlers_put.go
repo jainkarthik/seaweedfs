@@ -524,14 +524,15 @@ func (s3a *S3ApiServer) putToFiler(r *http.Request, filePath string, dataReader 
 	// Use context.Background() to ensure chunk uploads complete even if HTTP request is cancelled
 	// This prevents partial uploads and data corruption
 	chunkResult, err := operation.UploadReaderInChunks(context.Background(), dataReader, &operation.ChunkedUploadOption{
-		ChunkSize:       chunkSize,
-		SmallFileLimit:  smallFileLimit,
-		Collection:      collection,
-		DataCenter:      s3a.option.DataCenter,
-		SaveSmallInline: false, // S3 API always creates chunks, never stores inline
-		MimeType:        r.Header.Get("Content-Type"),
-		Cipher:          s3a.cipher, // encrypt data on volume servers
-		AssignFunc:      assignFunc,
+		ChunkSize:           chunkSize,
+		SmallFileLimit:      smallFileLimit,
+		Collection:          collection,
+		DataCenter:          s3a.option.DataCenter,
+		SaveSmallInline:     false, // S3 API always creates chunks, never stores inline
+		MimeType:            r.Header.Get("Content-Type"),
+		Cipher:              s3a.cipher, // encrypt data on volume servers
+		MaxConcurrentChunks: s3a.option.UploadChunkParallelism,
+		AssignFunc:          assignFunc,
 	})
 	if err != nil {
 		glog.Errorf("putToFiler: chunked upload failed: %v", err)
