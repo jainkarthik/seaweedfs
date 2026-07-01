@@ -465,10 +465,15 @@ func (s3a *S3ApiServer) putToFiler(r *http.Request, filePath string, dataReader 
 	}
 
 	// filePath is already provided directly - no URL parsing needed
-	// Step 1 & 2: Use auto-chunking to handle large files without OOM
-	// This splits large uploads into 8MB chunks, preventing memory issues on both S3 API and volume servers
-	const chunkSize = 8 * 1024 * 1024 // 8MB chunks (S3 standard)
-	const smallFileLimit = 256 * 1024 // 256KB - store inline in filer
+	// Step 1 & 2: Use auto-chunking to handle large files without OOM.
+	// Keep 8MB as default for backward compatibility, but allow tuning to reduce
+	// per-chunk assign/upload overhead on high-bandwidth systems.
+	const defaultChunkSize = 8 * 1024 * 1024 // 8MB default internal chunk size
+	const smallFileLimit = 256 * 1024        // 256KB - store inline in filer
+	chunkSize := int32(defaultChunkSize)
+	if s3a.option.UploadChunkSizeMB > 0 {
+		chunkSize = int32(s3a.option.UploadChunkSizeMB * 1024 * 1024)
+	}
 
 	collection := ""
 	if s3a.option.FilerGroup != "" {

@@ -179,6 +179,7 @@ func init() {
 	s3Options.concurrentUploadLimitMB = cmdServer.Flag.Int("s3.concurrentUploadLimitMB", 0, "limit total concurrent upload size for S3, 0 means unlimited")
 	s3Options.concurrentFileUploadLimit = cmdServer.Flag.Int("s3.concurrentFileUploadLimit", 0, "limit number of concurrent file uploads for S3, 0 means unlimited")
 	s3Options.uploadChunkParallelism = cmdServer.Flag.Int("s3.uploadChunkParallelism", 4, "number of in-flight S3 upload chunks per object")
+	s3Options.uploadChunkSizeMB = cmdServer.Flag.Int("s3.uploadChunkSizeMB", 8, "chunk size in MB used for internal S3 upload chunking")
 	s3Options.enableIam = cmdServer.Flag.Bool("s3.iam", true, "enable embedded IAM API on the same S3 port")
 	s3Options.iamReadOnly = cmdServer.Flag.Bool("s3.iam.readOnly", true, "disable IAM write operations on this server")
 	s3Options.cipher = cmdServer.Flag.Bool("s3.encryptVolumeData", false, "encrypt data on volume servers for S3 uploads")
