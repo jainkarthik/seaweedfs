@@ -57,6 +57,7 @@ Table of Contents
 * [Quick Start](#quick-start)
     * [Quick Start with weed mini](#quick-start-with-weed-mini)
     * [Quick Start for S3 API on Docker](#quick-start-for-s3-api-on-docker)
+    * [S3 Upload Throughput Tuning](#s3-upload-throughput-tuning)
 * [Introduction](#introduction)
 * [Features](#features)
     * [Additional Features](#additional-features)
@@ -115,6 +116,29 @@ docker run -p 8333:8333 \
 ```
 
 Same behavior as the `weed mini` command above — the S3 endpoint is at http://localhost:8333 with `my-bucket` pre-created. Drop the env vars to run anonymously for development.
+
+## S3 Upload Throughput Tuning ##
+
+For high-bandwidth single-copy deployments, tune S3 upload internals with:
+
+- `-s3.uploadChunkParallelism` (or `-uploadChunkParallelism` in standalone S3 mode), default `4`
+- `-s3.uploadChunkSizeMB` (or `-uploadChunkSizeMB` in standalone S3 mode), default `8`
+
+These control per-object in-flight chunk uploads and internal chunk size used by the S3 write path.
+
+Rollback to safe defaults:
+
+- `uploadChunkParallelism=4`
+- `uploadChunkSizeMB=8`
+
+Related observability metrics include:
+
+- `SeaweedFS_s3_put_to_filer_stage_seconds{stage,bucket}`
+- `SeaweedFS_s3_put_to_filer_assign_rpc_total{bucket}`
+- `SeaweedFS_s3_put_to_filer_assign_batch_size{bucket}`
+- `SeaweedFS_s3_put_to_filer_chunk_count{bucket}`
+- `SeaweedFS_s3_put_to_filer_result_total{result,bucket}`
+- `SeaweedFS_s3_put_to_filer_uploaded_bytes{bucket}`
 
 # Introduction #
 

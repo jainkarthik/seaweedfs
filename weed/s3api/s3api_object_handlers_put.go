@@ -78,6 +78,22 @@ type SSEResponseMetadata struct {
 	ChecksumValue      string // base64-encoded checksum value
 }
 
+func recordPutToFilerResultMetrics(bucket string, start time.Time, code s3err.ErrorCode) {
+	stats_collect.S3PutToFilerStageHistogram.WithLabelValues("total", bucket).Observe(time.Since(start).Seconds())
+	result := "success"
+	if code != s3err.ErrNone {
+		result = "error"
+	}
+	stats_collect.S3PutToFilerResultCounter.WithLabelValues(result, bucket).Inc()
+}
+
+func nextAssignedFid(baseFid string, index int) string {
+	if index <= 0 {
+		return baseFid
+	}
+	return fmt.Sprintf("%s_%d", baseFid, index)
+}
+
 func (s3a *S3ApiServer) PutObjectHandler(w http.ResponseWriter, r *http.Request) {
 	// http://docs.aws.amazon.com/AmazonS3/latest/dev/UploadingObjects.html
 
@@ -377,12 +393,7 @@ func (s3a *S3ApiServer) putToFiler(r *http.Request, filePath string, dataReader 
 	}
 	putToFilerStartTime := time.Now()
 	defer func() {
-		stats_collect.S3PutToFilerStageHistogram.WithLabelValues("total", bucket).Observe(time.Since(putToFilerStartTime).Seconds())
-		result := "success"
-		if code != s3err.ErrNone {
-			result = "error"
-		}
-		stats_collect.S3PutToFilerResultCounter.WithLabelValues(result, bucket).Inc()
+		recordPutToFilerResultMetrics(bucket, putToFilerStartTime, code)
 	}()
 	// NEW OPTIMIZATION: Write directly to volume servers, bypassing filer proxy
 	// This eliminates the filer proxy overhead for PUT operations
@@ -549,10 +560,7 @@ func (s3a *S3ApiServer) putToFiler(r *http.Request, filePath string, dataReader 
 		}
 
 		assignResult := assignState.base
-		fid := assignResult.FileId
-		if assignState.next > 0 {
-			fid = fmt.Sprintf("%s_%d", assignResult.FileId, assignState.next)
-		}
+		fid := nextAssignedFid(assignResult.FileId, assignState.next)
 		assignState.next++
 
 		// Convert filer_pb.AssignVolumeResponse to operation.AssignResult
