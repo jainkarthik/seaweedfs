@@ -620,6 +620,41 @@ var (
 			Help:      "Number of objects uploaded in each bucket.",
 		}, []string{"bucket"})
 
+	S3PutToFilerStageHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: Namespace,
+			Subsystem: subsystemS3,
+			Name:      "put_to_filer_stage_seconds",
+			Help:      "Bucketed histogram of S3 putToFiler stage durations.",
+			Buckets:   prometheus.ExponentialBuckets(0.0001, 2, 24),
+		}, []string{"stage", "bucket"})
+
+	S3PutToFilerAssignRpcCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: Namespace,
+			Subsystem: subsystemS3,
+			Name:      "put_to_filer_assign_rpc_total",
+			Help:      "Number of AssignVolume RPC calls issued from S3 putToFiler.",
+		}, []string{"bucket"})
+
+	S3PutToFilerAssignBatchSizeHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: Namespace,
+			Subsystem: subsystemS3,
+			Name:      "put_to_filer_assign_batch_size",
+			Help:      "Histogram of AssignVolume batch sizes consumed by S3 putToFiler.",
+			Buckets:   []float64{1, 2, 4, 8, 16, 32, 64},
+		}, []string{"bucket"})
+
+	S3PutToFilerChunkCountHistogram = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Namespace: Namespace,
+			Subsystem: subsystemS3,
+			Name:      "put_to_filer_chunk_count",
+			Help:      "Histogram of chunk counts produced by S3 putToFiler per uploaded object.",
+			Buckets:   []float64{1, 2, 4, 8, 16, 32, 64, 128, 256},
+		}, []string{"bucket"})
+
 	S3BucketSizeBytesGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Namespace: Namespace,
@@ -921,6 +956,10 @@ func init() {
 	Gather.MustRegister(S3BucketTrafficSentBytesCounter)
 	Gather.MustRegister(S3DeletedObjectsCounter)
 	Gather.MustRegister(S3UploadedObjectsCounter)
+	Gather.MustRegister(S3PutToFilerStageHistogram)
+	Gather.MustRegister(S3PutToFilerAssignRpcCounter)
+	Gather.MustRegister(S3PutToFilerAssignBatchSizeHistogram)
+	Gather.MustRegister(S3PutToFilerChunkCountHistogram)
 	Gather.MustRegister(S3BucketSizeBytesGauge)
 	Gather.MustRegister(S3BucketPhysicalSizeBytesGauge)
 	Gather.MustRegister(S3BucketObjectCountGauge)
@@ -1017,6 +1056,10 @@ func DeleteBucketMetrics(bucket string) {
 	c += S3BucketTrafficSentBytesCounter.DeletePartialMatch(labels)
 	c += S3DeletedObjectsCounter.DeletePartialMatch(labels)
 	c += S3UploadedObjectsCounter.DeletePartialMatch(labels)
+	c += S3PutToFilerStageHistogram.DeletePartialMatch(labels)
+	c += S3PutToFilerAssignRpcCounter.DeletePartialMatch(labels)
+	c += S3PutToFilerAssignBatchSizeHistogram.DeletePartialMatch(labels)
+	c += S3PutToFilerChunkCountHistogram.DeletePartialMatch(labels)
 	c += S3BucketSizeBytesGauge.DeletePartialMatch(labels)
 	c += S3BucketPhysicalSizeBytesGauge.DeletePartialMatch(labels)
 	c += S3BucketObjectCountGauge.DeletePartialMatch(labels)
@@ -1067,6 +1110,9 @@ func bucketMetricTTLControl() {
 			// lifetime so that Prometheus rate()/increase() queries work correctly.
 			c := S3RequestHistogram.DeletePartialMatch(labels)
 			c += S3TimeToFirstByteHistogram.DeletePartialMatch(labels)
+			c += S3PutToFilerStageHistogram.DeletePartialMatch(labels)
+			c += S3PutToFilerAssignBatchSizeHistogram.DeletePartialMatch(labels)
+			c += S3PutToFilerChunkCountHistogram.DeletePartialMatch(labels)
 			c += S3BucketSizeBytesGauge.DeletePartialMatch(labels)
 			c += S3BucketPhysicalSizeBytesGauge.DeletePartialMatch(labels)
 			c += S3BucketObjectCountGauge.DeletePartialMatch(labels)

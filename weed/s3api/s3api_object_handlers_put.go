@@ -375,6 +375,10 @@ func (s3a *S3ApiServer) putToFiler(r *http.Request, filePath string, dataReader 
 	if !s3_constants.IsValidBucketName(bucket) || (object != "" && !s3_constants.IsValidObjectKey(object)) {
 		return "", s3err.ErrInvalidRequest, SSEResponseMetadata{}
 	}
+	putToFilerStartTime := time.Now()
+	defer func() {
+		stats_collect.S3PutToFilerStageHistogram.WithLabelValues("total", bucket).Observe(time.Since(putToFilerStartTime).Seconds())
+	}()
 	// NEW OPTIMIZATION: Write directly to volume servers, bypassing filer proxy
 	// This eliminates the filer proxy overhead for PUT operations
 	// Note: filePath is now passed directly instead of URL (no parsing needed)
@@ -502,6 +506,7 @@ func (s3a *S3ApiServer) putToFiler(r *http.Request, filePath string, dataReader 
 		defer assignState.Unlock()
 
 		if assignState.base == nil || assignState.next >= assignState.limit {
+			assignRpcStart := time.Now()
 			var assignResult *filer_pb.AssignVolumeResponse
 			err := s3a.WithFilerClient(false, func(client filer_pb.SeaweedFilerClient) error {
 				resp, err := client.AssignVolume(ctx, &filer_pb.AssignVolumeRequest{
@@ -523,6 +528,8 @@ func (s3a *S3ApiServer) putToFiler(r *http.Request, filePath string, dataReader 
 				assignResult = resp
 				return nil
 			})
+			stats_collect.S3PutToFilerStageHistogram.WithLabelValues("assign_rpc", bucket).Observe(time.Since(assignRpcStart).Seconds())
+			stats_collect.S3PutToFilerAssignRpcCounter.WithLabelValues(bucket).Inc()
 			if err != nil {
 				return nil, nil, err
 			}
@@ -530,6 +537,7 @@ func (s3a *S3ApiServer) putToFiler(r *http.Request, filePath string, dataReader 
 			if limit <= 0 {
 				limit = 1
 			}
+			stats_collect.S3PutToFilerAssignBatchSizeHistogram.WithLabelValues(bucket).Observe(float64(limit))
 			assignState.base = assignResult
 			assignState.next = 0
 			assignState.limit = limit
@@ -563,6 +571,7 @@ func (s3a *S3ApiServer) putToFiler(r *http.Request, filePath string, dataReader 
 	// Upload with auto-chunking
 	// Use context.Background() to ensure chunk uploads complete even if HTTP request is cancelled
 	// This prevents partial uploads and data corruption
+	chunkUploadStart := time.Now()
 	chunkResult, err := operation.UploadReaderInChunks(context.Background(), dataReader, &operation.ChunkedUploadOption{
 		ChunkSize:           chunkSize,
 		SmallFileLimit:      smallFileLimit,
@@ -574,6 +583,7 @@ func (s3a *S3ApiServer) putToFiler(r *http.Request, filePath string, dataReader 
 		MaxConcurrentChunks: s3a.option.UploadChunkParallelism,
 		AssignFunc:          assignFunc,
 	})
+	stats_collect.S3PutToFilerStageHistogram.WithLabelValues("chunk_upload", bucket).Observe(time.Since(chunkUploadStart).Seconds())
 	if err != nil {
 		glog.Errorf("putToFiler: chunked upload failed: %v", err)
 
@@ -585,6 +595,7 @@ func (s3a *S3ApiServer) putToFiler(r *http.Request, filePath string, dataReader 
 			glog.Warningf("putToFiler: Upload failed, attempting to cleanup %d orphaned chunks", len(chunkResult.FileChunks))
 			s3a.deleteOrphanedChunks(chunkResult.FileChunks)
 		}
+		stats_collect.S3PutToFilerChunkCountHistogram.WithLabelValues(bucket).Observe(float64(len(chunkResult.FileChunks)))
 
 		if strings.Contains(err.Error(), s3err.ErrMsgPayloadChecksumMismatch) {
 			return "", s3err.ErrInvalidDigest, SSEResponseMetadata{}
