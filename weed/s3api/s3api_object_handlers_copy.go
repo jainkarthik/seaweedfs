@@ -1587,7 +1587,7 @@ func (s3a *S3ApiServer) prepareChunkCopy(sourceFileId, dstPath string, expectedD
 // uploadChunkData uploads chunk data to the destination using common upload logic
 // isCompressed indicates if the data is already compressed and should not be compressed again
 func (s3a *S3ApiServer) uploadChunkData(chunkData []byte, assignResult *filer_pb.AssignVolumeResponse, isCompressed bool) error {
-	uploadOption := newChunkUploadOption(chunkData, assignResult, isCompressed)
+	uploadOption := newChunkUploadOption(chunkData, assignResult, isCompressed, s3a.option.PutFsync)
 	uploader, err := operation.NewUploader()
 	if err != nil {
 		return fmt.Errorf("create uploader: %w", err)
@@ -1614,8 +1614,8 @@ const multipartFramingOverhead = 1024
 // process's lifetime, and under concurrent UploadPartCopy load it hoarded
 // one chunk-sized buffer per concurrent upload (see #6541). The per-call
 // buffer is GC'd as soon as the upload returns.
-func newChunkUploadOption(chunkData []byte, assignResult *filer_pb.AssignVolumeResponse, isCompressed bool) *operation.UploadOption {
-	dstUrl := fmt.Sprintf("http://%s/%s", assignResult.Location.Url, assignResult.FileId)
+func newChunkUploadOption(chunkData []byte, assignResult *filer_pb.AssignVolumeResponse, isCompressed bool, fsync bool) *operation.UploadOption {
+	dstUrl := fmt.Sprintf("http://%s/%s?fsync=%t", assignResult.Location.Url, assignResult.FileId, fsync)
 	return &operation.UploadOption{
 		UploadUrl:         dstUrl,
 		Cipher:            false, // Data is already encrypted if source had CipherKey; don't re-encrypt

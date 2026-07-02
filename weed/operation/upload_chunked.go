@@ -9,6 +9,7 @@ import (
 	"hash"
 	"io"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,6 +38,7 @@ type ChunkedUploadOption struct {
 	Jwt             security.EncodedJwt
 	MimeType        string
 	Cipher          bool // encrypt data on volume servers
+	Fsync           bool // force fsync behavior on volume writes for each uploaded chunk
 	// MaxConcurrentChunks limits in-flight chunk uploads per object.
 	// If <= 0, UploadReaderInChunks uses the default (4).
 	MaxConcurrentChunks int
@@ -195,8 +197,14 @@ uploadLoop:
 			if opt.UploadFunc == nil && !opt.Cipher && len(holders) > 1 {
 				uploadResult, uploadResultErr = uploadChunkToHolders(ctx, holders, assignResult.Fid, buf.Bytes(), jwt, chunkMd5B64, opt)
 			} else {
+				chunkUploadURL := fmt.Sprintf("http://%s/%s", assignResult.Url, assignResult.Fid)
+				querySeparator := "?"
+				if strings.Contains(chunkUploadURL, "?") {
+					querySeparator = "&"
+				}
+				chunkUploadURL += querySeparator + "fsync=" + fmt.Sprintf("%t", opt.Fsync)
 				uploadOption := &UploadOption{
-					UploadUrl:         fmt.Sprintf("http://%s/%s", assignResult.Url, assignResult.Fid),
+					UploadUrl:         chunkUploadURL,
 					Cipher:            opt.Cipher,
 					IsInputCompressed: false,
 					MimeType:          opt.MimeType,

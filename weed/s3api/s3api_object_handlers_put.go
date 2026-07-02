@@ -593,6 +593,7 @@ func (s3a *S3ApiServer) putToFiler(r *http.Request, filePath string, dataReader 
 		SaveSmallInline:     false, // S3 API always creates chunks, never stores inline
 		MimeType:            r.Header.Get("Content-Type"),
 		Cipher:              s3a.cipher, // encrypt data on volume servers
+		Fsync:               s3a.option.PutFsync,
 		MaxConcurrentChunks: s3a.option.UploadChunkParallelism,
 		AssignFunc:          assignFunc,
 	})

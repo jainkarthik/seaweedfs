@@ -180,6 +180,7 @@ func init() {
 	s3Options.concurrentFileUploadLimit = cmdServer.Flag.Int("s3.concurrentFileUploadLimit", 0, "limit number of concurrent file uploads for S3, 0 means unlimited")
 	s3Options.uploadChunkParallelism = cmdServer.Flag.Int("s3.uploadChunkParallelism", 4, "number of in-flight S3 upload chunks per object")
 	s3Options.uploadChunkSizeMB = cmdServer.Flag.Int("s3.uploadChunkSizeMB", 8, "chunk size in MB used for internal S3 upload chunking")
+	s3Options.putFsync = cmdServer.Flag.Bool("s3.putFsync", false, "force fsync=true or fsync=false on each S3 PUT chunk upload (default false for throughput)")
 	s3Options.downloadChunkPrefetch = cmdServer.Flag.Int("s3.downloadChunkPrefetch", 4, "number of chunks to prefetch per S3 GET/read stream")
 	s3Options.downloadCopyBufferKB = cmdServer.Flag.Int("s3.downloadCopyBufferKB", 256, "copy buffer size in KB used for S3 GET/read streaming")
 	s3Options.enableIam = cmdServer.Flag.Bool("s3.iam", true, "enable embedded IAM API on the same S3 port")

@@ -123,10 +123,12 @@ For high-bandwidth single-copy deployments, tune S3 upload internals with:
 
 - `-s3.uploadChunkParallelism` (or `-uploadChunkParallelism` in standalone S3 mode), default `4`
 - `-s3.uploadChunkSizeMB` (or `-uploadChunkSizeMB` in standalone S3 mode), default `8`
+- `-s3.putFsync` (or `-putFsync` in standalone S3 mode), default `false`
 - `-s3.downloadChunkPrefetch` (or `-downloadChunkPrefetch` in standalone S3 mode), default `4`
 - `-s3.downloadCopyBufferKB` (or `-downloadCopyBufferKB` in standalone S3 mode), default `256`
 
 These control per-object in-flight chunk uploads and internal chunk size used by the S3 write path.
+`putFsync=false` keeps S3 PUT chunk uploads on the fast path (no forced fsync on each chunk write).
 Guardrail ranges are enforced at startup:
 
 - `uploadChunkParallelism`: `1..128` (fallback to `4` when invalid)
@@ -138,6 +140,7 @@ Rollback to safe defaults:
 
 - `uploadChunkParallelism=4`
 - `uploadChunkSizeMB=8`
+- `putFsync=false`
 - `downloadChunkPrefetch=4`
 - `downloadCopyBufferKB=256`
 

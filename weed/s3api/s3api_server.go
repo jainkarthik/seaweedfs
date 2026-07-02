@@ -59,6 +59,7 @@ type S3ApiServerOption struct {
 	ConcurrentFileUploadLimit int64
 	UploadChunkParallelism    int
 	UploadChunkSizeMB         int
+	PutFsync                  bool
 	DownloadChunkPrefetch     int
 	DownloadCopyBufferKB      int
 	EnableIam                 bool // Enable embedded IAM API on the same port

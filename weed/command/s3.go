@@ -66,6 +66,7 @@ type S3Options struct {
 	concurrentFileUploadLimit *int
 	uploadChunkParallelism    *int
 	uploadChunkSizeMB         *int
+	putFsync                  *bool
 	downloadChunkPrefetch     *int
 	downloadCopyBufferKB      *int
 	enableIam                 *bool
@@ -112,6 +113,7 @@ func init() {
 	s3StandaloneOptions.concurrentFileUploadLimit = cmdS3.Flag.Int("concurrentFileUploadLimit", 0, "limit number of concurrent file uploads, 0 means unlimited")
 	s3StandaloneOptions.uploadChunkParallelism = cmdS3.Flag.Int("uploadChunkParallelism", 4, "number of in-flight S3 upload chunks per object")
 	s3StandaloneOptions.uploadChunkSizeMB = cmdS3.Flag.Int("uploadChunkSizeMB", 8, "chunk size in MB used for internal S3 upload chunking")
+	s3StandaloneOptions.putFsync = cmdS3.Flag.Bool("putFsync", false, "force fsync=true or fsync=false on each S3 PUT chunk upload (default false for throughput)")
 	s3StandaloneOptions.downloadChunkPrefetch = cmdS3.Flag.Int("downloadChunkPrefetch", 4, "number of chunks to prefetch per S3 GET/read stream")
 	s3StandaloneOptions.downloadCopyBufferKB = cmdS3.Flag.Int("downloadCopyBufferKB", 256, "copy buffer size in KB used for S3 GET/read streaming")
 	s3StandaloneOptions.enableIam = cmdS3.Flag.Bool("iam", true, "enable embedded IAM API on the same port")
@@ -340,6 +342,10 @@ func (s3opt *S3Options) startS3Server() bool {
 	if fileModeErr != nil {
 		glog.Fatalf("S3 API Server startup error: %v", fileModeErr)
 	}
+	putFsync := false
+	if s3opt.putFsync != nil {
+		putFsync = *s3opt.putFsync
+	}
 
 	s3ApiServer, s3ApiServer_err = s3api.NewS3ApiServer(router, &s3api.S3ApiServerOption{
 		Filers:                    filerAddresses,
@@ -359,6 +365,7 @@ func (s3opt *S3Options) startS3Server() bool {
 		ConcurrentFileUploadLimit: int64(*s3opt.concurrentFileUploadLimit),
 		UploadChunkParallelism:    *s3opt.uploadChunkParallelism,
 		UploadChunkSizeMB:         *s3opt.uploadChunkSizeMB,
+		PutFsync:                  putFsync,
 		DownloadChunkPrefetch:     *s3opt.downloadChunkPrefetch,
 		DownloadCopyBufferKB:      *s3opt.downloadCopyBufferKB,
 		EnableIam:                 *s3opt.enableIam, // Embedded IAM API (enabled by default)

@@ -1,6 +1,7 @@
 package s3api
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
@@ -38,7 +39,7 @@ func TestNewChunkUploadOption_AvoidsBytePool(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			data := make([]byte, c.chunkLen)
-			opt := newChunkUploadOption(data, assign, false)
+			opt := newChunkUploadOption(data, assign, false, false)
 
 			if opt.BytesBuffer == nil {
 				t.Fatalf("BytesBuffer must be non-nil so chunk uploads bypass " +
@@ -55,6 +56,9 @@ func TestNewChunkUploadOption_AvoidsBytePool(t *testing.T) {
 				t.Errorf("Cipher must be false: chunk-copy data is already " +
 					"encrypted if the source had a CipherKey")
 			}
+			if !strings.HasSuffix(opt.UploadUrl, "?fsync=false") {
+				t.Errorf("UploadUrl=%q, want ?fsync=false suffix", opt.UploadUrl)
+			}
 		})
 	}
 }
@@ -68,8 +72,8 @@ func TestNewChunkUploadOption_PerCallIsolation(t *testing.T) {
 		Location: &filer_pb.Location{Url: "127.0.0.1:8080"},
 	}
 
-	o1 := newChunkUploadOption(nil, assign, false)
-	o2 := newChunkUploadOption(nil, assign, false)
+	o1 := newChunkUploadOption(nil, assign, false, false)
+	o2 := newChunkUploadOption(nil, assign, false, false)
 	if o1.BytesBuffer == o2.BytesBuffer {
 		t.Fatalf("newChunkUploadOption must hand each caller a distinct buffer; " +
 			"sharing one across concurrent uploads would corrupt the multipart bodies")
