@@ -1,0 +1,173 @@
+name: "S3 Throughput Regression Tests"
+
+on:
+  push:
+    branches: [ master, main ]
+    paths:
+      - 'weed/s3api/**'
+      - 'weed/operation/upload_*.go'
+      - 'weed/stats/metrics.go'
+      - 'weed/command/s3.go'
+      - 'weed/command/filer.go'
+      - 'weed/command/server.go'
+      - 'weed/command/mini.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/s3-throughput-regression-tests.yml'
+  pull_request:
+    branches: [ master, main ]
+    paths:
+      - 'weed/s3api/**'
+      - 'weed/operation/upload_*.go'
+      - 'weed/stats/metrics.go'
+      - 'weed/command/s3.go'
+      - 'weed/command/filer.go'
+      - 'weed/command/server.go'
+      - 'weed/command/mini.go'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/s3-throughput-regression-tests.yml'
+
+concurrency:
+  group: ${{ github.head_ref }}/s3-throughput-regression
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: weed
+
+jobs:
+  s3-throughput-regression:
+    name: S3 Throughput Regression Tests
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+        id: go
+
+      - name: Run S3 Throughput Regression Tests
+        timeout-minutes: 10
+        run: |
+          set -x
+          echo "=== Running S3 Throughput Regression Tests ==="
+          
+          # Run targeted S3 throughput regression test suite:
+          # - PUT path metrics and batching behavior
+          # - GET path metrics, prefetch, and copy buffer options
+          # - Metadata/listing metrics and dedup optimization
+          # - Multipart completion metrics and latency optimization
+          # - Reliability/retry mechanics for chunk fetches
+          # - S3 server option normalization/guardrails
+          
+          go test -v -timeout 5m ./s3api -run 'Test(NextAssignedFid|RecordPutToFilerResultMetrics|GetDownloadChunk|RecordGetObjectResultMetrics|AppendCommonPrefixDedup|RecordMetadataResultMetrics|RecordMultipartResultMetrics|FetchVolumeServerWithRetry|NormalizeThroughputOptions)'
+          
+      - name: Show test summary
+        if: always()
+        run: |
+          echo "✅ S3 throughput regression test suite completed"
+          echo ""
+          echo "Coverage:"
+          echo "  - PUT/multipart chunk batching: TestNextAssignedFid"
+          echo "  - PUT metrics emission: TestRecordPutToFilerResultMetrics"
+          echo "  - GET prefetch/buffer options: TestGetDownloadChunk*"
+          echo "  - GET metrics emission: TestRecordGetObjectResultMetrics"
+          echo "  - Metadata dedup: TestAppendCommonPrefixDedup"
+          echo "  - Metadata metrics: TestRecordMetadataResultMetrics"
+          echo "  - Multipart completion metrics: TestRecordMultipartResultMetrics"
+          echo "  - Reliability retries: TestFetchVolumeServerWithRetry*"
+          echo "  - Option normalization: TestNormalizeThroughputOptions*"
+
+  s3-server-options:
+    name: S3 Server Options Guardrails
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+        id: go
+
+      - name: Run S3 Server Options Tests
+        timeout-minutes: 5
+        run: |
+          set -x
+          echo "=== Validating S3 Server Option Guardrails ==="
+          echo ""
+          echo "Guardrail ranges enforced:"
+          echo "  - uploadChunkParallelism: 1..128 (default 4)"
+          echo "  - uploadChunkSizeMB: 1..1024 (default 8)"
+          echo "  - downloadChunkPrefetch: 1..64 (default 4)"
+          echo "  - downloadCopyBufferKB: 1..4096 (default 256)"
+          echo ""
+          
+          go test -v -timeout 5m ./s3api -run 'TestNormalizeThroughputOptions'
+
+  s3-reliability-guards:
+    name: S3 Reliability Hardening Guards
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+        id: go
+
+      - name: Run Reliability Tests
+        timeout-minutes: 5
+        run: |
+          set -x
+          echo "=== Validating S3 Reliability Hardening ==="
+          echo ""
+          echo "Reliability features:"
+          echo "  - Bounded retry/backoff for chunk fetches (3 attempts, 20ms base)"
+          echo "  - Retryable response codes: 429, 5xx"
+          echo "  - Timeout/cancel handling"
+          echo "  - Reliability event metrics"
+          echo ""
+          
+          go test -v -timeout 5m ./s3api -run 'TestFetchVolumeServerWithRetry'
+
+  s3-metadata-latency:
+    name: S3 Metadata/Listing Latency Guards
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+        id: go
+
+      - name: Run Metadata Tests
+        timeout-minutes: 5
+        run: |
+          set -x
+          echo "=== Validating S3 Metadata/Listing Latency Optimizations ==="
+          echo ""
+          echo "Optimizations:"
+          echo "  - CommonPrefix dedup moved to set-based O(1) checks"
+          echo "  - Metadata stage/result metrics (parse, list_filer, response_write)"
+          echo "  - Multipart completion: single per-part latest-entry selection"
+          echo ""
+          
+          go test -v -timeout 5m ./s3api -run 'Test(AppendCommonPrefixDedup|RecordMetadataResultMetrics|RecordMultipartResultMetrics)'
