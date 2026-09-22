@@ -1,4 +1,30 @@
 .PHONY: test admin-generate admin-build admin-clean admin-dev admin-run admin-test admin-fmt admin-help
+.PHONY: build-amd64 build-arm64 gclear version
+
+VERSION		:= $(shell git describe --tags --exact-match 2>/dev/null || shell git describe --tags --always --dirty 2>/dev/null || echo "dev" )
+GIT_COMMIT	:= $(shell git rev-parse HEAD 2>/dev/null || echo "unknown")
+GIT_DATE	:= $(shell git log -1 --format='%ct' 2>/dev/null || echo "0")
+BUILD_DATE	:= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+#GO			:= $(shell which go)
+GO			?= $(shell which go 2>/dev/null || echo "/home/bryck/karthik/bin/go/bin/go")
+
+#GOFLAGS	:= -a -ldflags="-s -w"
+GOFLAGS		:= -a -trimpath
+CGO_ENABLED	:= 0
+
+LARGE_DISK_ENABLED	?= true
+ifeq ($(LARGE_DISK_ENABLED),true)
+GOFLAGS		+= -tags 5BytesOffset
+VERSION		:= $(VERSION)-8TB
+else
+VERSION		:= $(VERSION)-30GB
+endif
+
+FIPS_ENABLED ?= false
+ifeq ($(FIPS_ENABLED),true)
+CGO_ENABLED	= 1
+GOFLAGS		+= -tags=fips
+endif
 
 BINARY = weed
 ADMIN_DIR = weed/admin
@@ -9,13 +35,13 @@ debug ?= 0
 all: install
 
 install: admin-generate
-	cd weed; go install
+	cd weed; $(GO) install
 
 warp_install:
-	go install github.com/minio/warp@v0.7.6
+	$(GO) install github.com/minio/warp@v0.7.6
 
 full_install: admin-generate
-	cd weed; go install -tags "elastic gocdk sqlite ydb tarantool tikv rclone"
+	cd weed; $(GO) install -tags "elastic gocdk sqlite ydb tarantool tikv rclone"
 
 server: install
 	weed -v 0 server -s3 -filer -filer.maxMB=64 -volume.max=0 -master.volumeSizeLimitMB=100 -volume.preStopSeconds=1 -s3.port=8000 -s3.allowDeleteBucketNotEmpty=true -s3.config=./docker/compose/s3.json -metricsPort=9324
@@ -35,7 +61,7 @@ benchmark_with_pprof: debug = 1
 benchmark_with_pprof: benchmark
 
 test: admin-generate
-	cd weed; go test -tags "elastic gocdk sqlite ydb tarantool tikv rclone" -v ./...
+	cd weed; $(GO) test -tags "elastic gocdk sqlite ydb tarantool tikv rclone" -v ./...
 
 # Admin component targets
 admin-generate:
@@ -69,3 +95,22 @@ admin-fmt:
 admin-help:
 	@echo "Admin component help..."
 	@cd $(ADMIN_DIR) && $(MAKE) help
+
+build-amd64:
+	@echo "Building $(BINARY) $(if $(filter true,$(LARGE_DISK_ENABLED)),large disk,standard) version for linux/amd64..."
+	@VERSION="$(VERSION)" COMMIT="$(GIT_COMMIT)" BUILD_DATE="$(BUILD_DATE)" \
+		GOOS=linux GOARCH=amd64 CGO_ENABLED=$(CGO_ENABLED) $(GO) build $(GOFLAGS) \
+		-o $(BINARY)-$(VERSION)-linux-amd64 ./weed
+
+build-arm64:
+	@echo "Building $(BINARY) $(if $(filter true,$(LARGE_DISK_ENABLED)),large disk,standard) version for linux/arm64..."
+	@VERSION="$(VERSION)" COMMIT="$(GIT_COMMIT)" BUILD_DATE="$(BUILD_DATE)" \
+		GOOS=linux GOARCH=arm64 CGO_ENABLED=$(CGO_ENABLED) $(GO) build $(GOFLAGS) \
+		-o $(BINARY)-$(VERSION)-linux-arm64 ./weed
+
+version:
+	@echo "VERSION=$(VERSION)"
+	@echo "GIT_COMMIT=$(GIT_COMMIT)"
+	@echo "BUILD_DATE=$(BUILD_DATE)"
+	@echo "FIPS_ENABLED=$(FIPS_ENABLED)"
+

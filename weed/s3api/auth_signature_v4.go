@@ -122,6 +122,7 @@ func parseSignV4(v4Auth string) (sv signValues, aec s3err.ErrorCode) {
 
 	// Verify if the header algorithm is supported or not.
 	if !strings.HasPrefix(v4Auth, signV4Algorithm) {
+		glog.Warningf("[CUSTOM AUTH DEBUG] parseSignV4 unsupported algorithm prefix: %q (expected prefix %q)", v4Auth, signV4Algorithm)
 		return sv, s3err.ErrSignatureVersionNotSupported
 	}
 
@@ -129,6 +130,7 @@ func parseSignV4(v4Auth string) (sv signValues, aec s3err.ErrorCode) {
 	v4Auth = strings.TrimPrefix(v4Auth, signV4Algorithm)
 	authFields := strings.Split(strings.TrimSpace(v4Auth), ",")
 	if len(authFields) != 3 {
+		glog.Warningf("[CUSTOM AUTH DEBUG] parseSignV4 expected 3 comma-separated fields, got %d: %q (raw: %q)", len(authFields), authFields, v4Auth)
 		return sv, s3err.ErrMissingFields
 	}
 
@@ -408,6 +410,8 @@ func calculateAndVerifySignature(secretKey, method, urlPath, queryStr string, ex
 	if !compareSignatureV4(newSignature, authInfo.Signature) {
 		glog.V(4).Infof("Signature mismatch. Details:\n- CanonicalRequest: %q\n- StringToSign: %q\n- Calculated: %s, Provided: %s",
 			canonicalRequest, stringToSign, newSignature, authInfo.Signature)
+		glog.Warningf("[CUSTOM AUTH DEBUG] Signature mismatch:\n  CanonicalRequest:\n%s\n  StringToSign:\n%s\n  Calculated: %s\n  Provided:   %s",
+			canonicalRequest, stringToSign, newSignature, authInfo.Signature)
 		return "", s3err.ErrSignatureDoesNotMatch
 	}
 
@@ -451,6 +455,8 @@ func extractV4AuthInfoFromHeader(r *http.Request) (*v4AuthInfo, s3err.ErrorCode)
 	const maxSkew = 15 * time.Minute
 	now := time.Now().UTC()
 	if now.Sub(t) > maxSkew || t.Sub(now) > maxSkew {
+		glog.Warningf("[CUSTOM AUTH DEBUG] extractV4AuthInfoFromHeader clock skew exceeded: server=%v, request=%v, diff=%v (maxSkew=%v)",
+			now, t, now.Sub(t), maxSkew)
 		return nil, s3err.ErrRequestTimeTooSkewed
 	}
 
@@ -479,23 +485,33 @@ func extractV4AuthInfoFromHeader(r *http.Request) (*v4AuthInfo, s3err.ErrorCode)
 func extractV4AuthInfoFromQuery(r *http.Request) (*v4AuthInfo, s3err.ErrorCode) {
 	query := r.URL.Query()
 
+	glog.Warningf("[CUSTOM AUTH DEBUG] Presigned request URL: RawQuery=%q, RawPath=%q, Path=%q",
+		r.URL.RawQuery, r.URL.RawPath, r.URL.Path)
+
 	// Validate all required query parameters upfront for fail-fast behavior
 	if query.Get("X-Amz-Algorithm") != signV4Algorithm {
+		glog.Warningf("[CUSTOM AUTH DEBUG] extractV4AuthInfoFromQuery invalid algorithm: %q (expected %q)",
+			query.Get("X-Amz-Algorithm"), signV4Algorithm)
 		return nil, s3err.ErrSignatureVersionNotSupported
 	}
 	if query.Get("X-Amz-Date") == "" {
+		glog.Warningf("[CUSTOM AUTH DEBUG] extractV4AuthInfoFromQuery missing X-Amz-Date query param")
 		return nil, s3err.ErrMissingDateHeader
 	}
 	if query.Get("X-Amz-Credential") == "" {
+		glog.Warningf("[CUSTOM AUTH DEBUG] extractV4AuthInfoFromQuery missing X-Amz-Credential query param. RawQuery=%q", r.URL.RawQuery)
 		return nil, s3err.ErrMissingFields
 	}
 	if query.Get("X-Amz-Signature") == "" {
+		glog.Warningf("[CUSTOM AUTH DEBUG] extractV4AuthInfoFromQuery missing X-Amz-Signature query param")
 		return nil, s3err.ErrMissingFields
 	}
 	if query.Get("X-Amz-SignedHeaders") == "" {
+		glog.Warningf("[CUSTOM AUTH DEBUG] extractV4AuthInfoFromQuery missing X-Amz-SignedHeaders query param")
 		return nil, s3err.ErrMissingFields
 	}
 	if query.Get("X-Amz-Expires") == "" {
+		glog.Warningf("[CUSTOM AUTH DEBUG] extractV4AuthInfoFromQuery missing X-Amz-Expires query param")
 		return nil, s3err.ErrInvalidQueryParams
 	}
 
@@ -503,12 +519,15 @@ func extractV4AuthInfoFromQuery(r *http.Request) (*v4AuthInfo, s3err.ErrorCode) 
 	dateStr := query.Get("X-Amz-Date")
 	t, err := time.Parse(iso8601Format, dateStr)
 	if err != nil {
+		glog.Warningf("[CUSTOM AUTH DEBUG] extractV4AuthInfoFromQuery malformed X-Amz-Date %q: %v", dateStr, err)
 		return nil, s3err.ErrMalformedDate
 	}
 
 	// Parse credential header
 	credHeader, errCode := parseCredentialHeader("Credential=" + query.Get("X-Amz-Credential"))
 	if errCode != s3err.ErrNone {
+		glog.Warningf("[CUSTOM AUTH DEBUG] extractV4AuthInfoFromQuery parseCredentialHeader failed with error code %v for X-Amz-Credential=%q",
+			errCode, query.Get("X-Amz-Credential"))
 		return nil, errCode
 	}
 
@@ -551,20 +570,25 @@ func checkPresignedRequestExpiry(r *http.Request, t time.Time) s3err.ErrorCode {
 	// so it should never be empty here
 	expires, err := strconv.ParseInt(expiresStr, 10, 64)
 	if err != nil {
+		glog.Warningf("[CUSTOM AUTH DEBUG] checkPresignedRequestExpiry malformed expires %q: %v", expiresStr, err)
 		return s3err.ErrMalformedDate
 	}
 
 	// The maximum value for X-Amz-Expires is 604800 seconds (7 days)
 	// Allow 0 but it will immediately fail expiration check
 	if expires < 0 {
+		glog.Warningf("[CUSTOM AUTH DEBUG] checkPresignedRequestExpiry negative expires %d", expires)
 		return s3err.ErrNegativeExpires
 	}
 	if expires > 604800 {
+		glog.Warningf("[CUSTOM AUTH DEBUG] checkPresignedRequestExpiry expires exceeds maximum (%d > 604800)", expires)
 		return s3err.ErrMaximumExpires
 	}
 
 	expirationTime := t.Add(time.Duration(expires) * time.Second)
 	if time.Now().UTC().After(expirationTime) {
+		glog.Warningf("[CUSTOM AUTH DEBUG] Presigned URL expired: created=%v, expires=%ds, deadline=%v, now=%v",
+			t, expires, expirationTime, time.Now().UTC())
 		return s3err.ErrExpiredPresignRequest
 	}
 	return s3err.ErrNone
@@ -605,13 +629,17 @@ func (c credentialHeader) getScope() string {
 func parseCredentialHeader(credElement string) (ch credentialHeader, aec s3err.ErrorCode) {
 	creds := strings.SplitN(strings.TrimSpace(credElement), "=", 2)
 	if len(creds) != 2 {
+		glog.Warningf("[CUSTOM AUTH DEBUG] parseCredentialHeader failed: missing '=' in %q", credElement)
 		return ch, s3err.ErrMissingFields
 	}
 	if creds[0] != "Credential" {
+		glog.Warningf("[CUSTOM AUTH DEBUG] parseCredentialHeader failed: tag is %q (expected 'Credential') in %q", creds[0], credElement)
 		return ch, s3err.ErrMissingCredTag
 	}
 	credElements := strings.Split(strings.TrimSpace(creds[1]), "/")
 	if len(credElements) != 5 {
+		glog.Warningf("[CUSTOM AUTH DEBUG] parseCredentialHeader failed (ErrCredMalformed): expected 5 slash-separated parts, got %d parts: %q (raw value: %q)",
+			len(credElements), credElements, creds[1])
 		return ch, s3err.ErrCredMalformed
 	}
 	// Save access key id.
@@ -621,6 +649,7 @@ func parseCredentialHeader(credElement string) (ch credentialHeader, aec s3err.E
 	var e error
 	cred.scope.date, e = time.Parse(yyyymmdd, credElements[1])
 	if e != nil {
+		glog.Warningf("[CUSTOM AUTH DEBUG] parseCredentialHeader failed: invalid date %q (expected YYYYMMDD): %v", credElements[1], e)
 		return ch, s3err.ErrMalformedCredentialDate
 	}
 
@@ -634,12 +663,15 @@ func parseCredentialHeader(credElement string) (ch credentialHeader, aec s3err.E
 func parseSignature(signElement string) (string, s3err.ErrorCode) {
 	signFields := strings.Split(strings.TrimSpace(signElement), "=")
 	if len(signFields) != 2 {
+		glog.Warningf("[CUSTOM AUTH DEBUG] parseSignature failed: expected 'Signature=<sig>', got %q", signElement)
 		return "", s3err.ErrMissingFields
 	}
 	if signFields[0] != "Signature" {
+		glog.Warningf("[CUSTOM AUTH DEBUG] parseSignature failed: tag is %q (expected 'Signature') in %q", signFields[0], signElement)
 		return "", s3err.ErrMissingSignTag
 	}
 	if signFields[1] == "" {
+		glog.Warningf("[CUSTOM AUTH DEBUG] parseSignature failed: empty signature value in %q", signElement)
 		return "", s3err.ErrMissingFields
 	}
 	signature := signFields[1]
@@ -650,12 +682,15 @@ func parseSignature(signElement string) (string, s3err.ErrorCode) {
 func parseSignedHeader(signedHdrElement string) ([]string, s3err.ErrorCode) {
 	signedHdrFields := strings.Split(strings.TrimSpace(signedHdrElement), "=")
 	if len(signedHdrFields) != 2 {
+		glog.Warningf("[CUSTOM AUTH DEBUG] parseSignedHeader failed: missing '=' in %q", signedHdrElement)
 		return nil, s3err.ErrMissingFields
 	}
 	if signedHdrFields[0] != "SignedHeaders" {
+		glog.Warningf("[CUSTOM AUTH DEBUG] parseSignedHeader failed: tag is %q (expected 'SignedHeaders') in %q", signedHdrFields[0], signedHdrElement)
 		return nil, s3err.ErrMissingSignHeadersTag
 	}
 	if signedHdrFields[1] == "" {
+		glog.Warningf("[CUSTOM AUTH DEBUG] parseSignedHeader failed: empty signed headers value in %q", signedHdrElement)
 		return nil, s3err.ErrMissingFields
 	}
 	signedHeaders := strings.Split(signedHdrFields[1], ";")
