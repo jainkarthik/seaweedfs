@@ -198,6 +198,23 @@ func TestUpdateBucketConfigCacheConsistency(t *testing.T) {
 	})
 }
 
+func TestGetBucketLocationXML(t *testing.T) {
+	t.Run("empty location constraint", func(t *testing.T) {
+		loc := LocationConstraint{}
+		data, err := xml.Marshal(loc)
+		require.NoError(t, err)
+		assert.Equal(t, `<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></LocationConstraint>`, string(data))
+	})
+
+	t.Run("location constraint with region", func(t *testing.T) {
+		loc := LocationConstraint{LocationConstraint: "us-west-1"}
+		data, err := xml.Marshal(loc)
+		require.NoError(t, err)
+		assert.Equal(t, `<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/">us-west-1</LocationConstraint>`, string(data))
+	})
+}
+
+
 // mockIamInterface is a simple mock for testing
 type mockIamInterface struct{}
 
