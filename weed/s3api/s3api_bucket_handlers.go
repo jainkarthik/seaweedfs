@@ -105,6 +105,7 @@ func (s3a *S3ApiServer) ListBucketsHandler(w http.ResponseWriter, r *http.Reques
 			listBuckets.Bucket = append(listBuckets.Bucket, ListAllMyBucketsEntry{
 				Name:         entry.Name,
 				CreationDate: time.Unix(entry.Attributes.Crtime, 0).UTC(),
+				BucketArn:    fmt.Sprintf("arn:aws:s3:::%s", entry.Name),
 			})
 		}
 	}

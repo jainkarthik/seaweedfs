@@ -1042,6 +1042,7 @@ func (t *ListAllMyBuckets) UnmarshalXML(d *xml.Decoder, start xml.StartElement) 
 type ListAllMyBucketsEntry struct {
 	Name         string    `xml:"Name"`
 	CreationDate time.Time `xml:"CreationDate"`
+	BucketArn    string    `xml:"BucketArn,omitempty"`
 }
 
 func (t *ListAllMyBucketsEntry) MarshalXML(e *xml.Encoder, start xml.StartElement) error {

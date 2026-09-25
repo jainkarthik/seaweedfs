@@ -251,6 +251,31 @@ func TestListAllMyBucketsResultNamespace(t *testing.T) {
 	t.Logf("Generated XML:\n%s", xmlString)
 }
 
+func TestListAllMyBucketsResultBucketArn(t *testing.T) {
+	response := ListAllMyBucketsResult{
+		Owner: CanonicalUser{
+			ID:          "test-owner-id",
+			DisplayName: "test-owner",
+		},
+		Buckets: ListAllMyBucketsList{
+			Bucket: []ListAllMyBucketsEntry{
+				{
+					Name:         "test-bucket",
+					CreationDate: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+					BucketArn:    "arn:aws:s3:::test-bucket",
+				},
+			},
+		},
+	}
+
+	xmlData, err := xml.Marshal(response)
+	require.NoError(t, err, "Failed to marshal XML response")
+
+	xmlString := string(xmlData)
+	assert.Contains(t, xmlString, "<BucketArn>arn:aws:s3:::test-bucket</BucketArn>",
+		"XML response should contain BucketArn")
+}
+
 func TestLocationConstraintResponseXML(t *testing.T) {
 	t.Run("with region", func(t *testing.T) {
 		resp := LocationConstraint{
