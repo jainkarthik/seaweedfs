@@ -76,9 +76,10 @@ func (s3a *S3ApiServer) ListObjectsV2Handler(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Adjust marker if it ends with delimiter to skip all entries with that prefix
-	marker = adjustMarkerForDelimiter(marker, delimiter)
+	requestMarker := marker
+	marker = adjustMarkerForDelimiter(marker, originalPrefix, delimiter)
 
-	response, err := s3a.listFilerEntries(bucket, originalPrefix, maxKeys, marker, delimiter, encodingTypeUrl, fetchOwner)
+	response, err := s3a.listFilerEntries(bucket, originalPrefix, maxKeys, marker, requestMarker, delimiter, encodingTypeUrl, fetchOwner)
 
 	if err != nil {
 		s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
@@ -139,9 +140,10 @@ func (s3a *S3ApiServer) ListObjectsV1Handler(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Adjust marker if it ends with delimiter to skip all entries with that prefix
-	marker = adjustMarkerForDelimiter(marker, delimiter)
+	requestMarker := marker
+	marker = adjustMarkerForDelimiter(marker, originalPrefix, delimiter)
 
-	response, err := s3a.listFilerEntries(bucket, originalPrefix, uint16(maxKeys), marker, delimiter, encodingTypeUrl, true)
+	response, err := s3a.listFilerEntries(bucket, originalPrefix, uint16(maxKeys), marker, requestMarker, delimiter, encodingTypeUrl, true)
 
 	if err != nil {
 		s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
@@ -158,9 +160,13 @@ func (s3a *S3ApiServer) ListObjectsV1Handler(w http.ResponseWriter, r *http.Requ
 	writeSuccessResponseXML(w, r, response)
 }
 
-func (s3a *S3ApiServer) listFilerEntries(bucket string, originalPrefix string, maxKeys uint16, originalMarker string, delimiter string, encodingTypeUrl bool, fetchOwner bool) (response ListBucketResult, err error) {
+func (s3a *S3ApiServer) listFilerEntries(bucket string, originalPrefix string, maxKeys uint16, originalMarker string, requestMarker string, delimiter string, encodingTypeUrl bool, fetchOwner bool) (response ListBucketResult, err error) {
+	if requestMarker == "" {
+		requestMarker = originalMarker
+	}
+	excludedKey := excludedMarkerKey(requestMarker, originalMarker)
 	// convert full path prefix into directory name and prefix for entry name
-	requestDir, prefix, marker := normalizePrefixMarker(originalPrefix, originalMarker)
+	requestDir, prefix, marker, prefixEndsOnDelimiter := normalizePrefixMarker(originalPrefix, originalMarker)
 	bucketPrefix := fmt.Sprintf("%s/%s/", s3a.option.BucketsPath, bucket)
 	reqDir := bucketPrefix[:len(bucketPrefix)-1]
 	if requestDir != "" {
@@ -173,7 +179,7 @@ func (s3a *S3ApiServer) listFilerEntries(bucket string, originalPrefix string, m
 	var nextMarker string
 	cursor := &ListingCursor{
 		maxKeys:               maxKeys,
-		prefixEndsOnDelimiter: strings.HasSuffix(originalPrefix, "/") && len(originalMarker) == 0,
+		prefixEndsOnDelimiter: prefixEndsOnDelimiter,
 	}
 
 	// Special case: when maxKeys = 0, return empty results immediately with IsTruncated=false
@@ -181,7 +187,7 @@ func (s3a *S3ApiServer) listFilerEntries(bucket string, originalPrefix string, m
 		response = ListBucketResult{
 			Name:           bucket,
 			Prefix:         originalPrefix,
-			Marker:         originalMarker,
+			Marker:         requestMarker,
 			NextMarker:     "",
 			MaxKeys:        int(maxKeys),
 			Delimiter:      delimiter,
@@ -198,13 +204,16 @@ func (s3a *S3ApiServer) listFilerEntries(bucket string, originalPrefix string, m
 	// check filer
 	err = s3a.WithFilerClient(false, func(client filer_pb.SeaweedFilerClient) error {
 		var lastEntryWasCommonPrefix bool
-		var lastCommonPrefixName string
+		var lastCommonPrefix string
 
 		for {
 			empty := true
 
 			nextMarker, doErr = s3a.doListFilerEntries(client, reqDir, prefix, cursor, marker, delimiter, false, bucket, func(dir string, entry *filer_pb.Entry) {
 				empty = false
+				if excludedKey != "" && !entry.IsDirectory && fmt.Sprintf("%s/%s", dir, entry.Name)[len(bucketPrefix):] == excludedKey {
+					return
+				}
 				dirName, entryName, _ := entryUrlEncode(dir, entry.Name, encodingTypeUrl)
 				if entry.IsDirectory {
 					// When delimiter is specified, apply delimiter logic to directory key objects too
@@ -238,7 +247,7 @@ func (s3a *S3ApiServer) listFilerEntries(bucket string, originalPrefix string, m
 								cursor.maxKeys--
 								delimiterFound = true
 								lastEntryWasCommonPrefix = true
-								lastCommonPrefixName = delimitedPath[0]
+								lastCommonPrefix = delimitedPrefix
 							} else {
 								// This directory object belongs to an existing CommonPrefix, skip it
 								delimiterFound = true
@@ -260,13 +269,14 @@ func (s3a *S3ApiServer) listFilerEntries(bucket string, originalPrefix string, m
 					} else if delimiter != "" { // A response can contain CommonPrefixes only if you specify a delimiter.
 						// Use raw dir and entry.Name (not encoded) to ensure consistent handling
 						// Encoding will be applied after sorting if encodingTypeUrl is set
+						dirPrefix := fmt.Sprintf("%s/%s/", dir, entry.Name)[len(bucketPrefix):]
 						commonPrefixes = append(commonPrefixes, PrefixEntry{
-							Prefix: fmt.Sprintf("%s/%s/", dir, entry.Name)[len(bucketPrefix):],
+							Prefix: dirPrefix,
 						})
 						//All of the keys (up to 1,000) rolled up into a common prefix count as a single return when calculating the number of returns.
 						cursor.maxKeys--
 						lastEntryWasCommonPrefix = true
-						lastCommonPrefixName = entry.Name
+						lastCommonPrefix = dirPrefix
 					}
 				} else {
 					var delimiterFound bool
@@ -298,7 +308,7 @@ func (s3a *S3ApiServer) listFilerEntries(bucket string, originalPrefix string, m
 								cursor.maxKeys--
 								delimiterFound = true
 								lastEntryWasCommonPrefix = true
-								lastCommonPrefixName = delimitedPath[0]
+								lastCommonPrefix = delimitedPrefix
 							} else {
 								// This object belongs to an existing CommonPrefix, skip it
 								// but continue processing to maintain correct flow
@@ -319,17 +329,8 @@ func (s3a *S3ApiServer) listFilerEntries(bucket string, originalPrefix string, m
 			}
 
 			// Adjust nextMarker for CommonPrefixes to include trailing slash (AWS S3 compliance)
-			if cursor.isTruncated && lastEntryWasCommonPrefix && lastCommonPrefixName != "" {
-				// For CommonPrefixes, NextMarker should include the trailing slash
-				if requestDir != "" {
-					nextMarker = requestDir + "/" + lastCommonPrefixName + "/"
-				} else {
-					nextMarker = lastCommonPrefixName + "/"
-				}
-			} else if cursor.isTruncated {
-				if requestDir != "" {
-					nextMarker = requestDir + "/" + nextMarker
-				}
+			if cursor.isTruncated {
+				nextMarker = buildTruncatedNextMarker(requestDir, nextMarker, lastEntryWasCommonPrefix, lastCommonPrefix)
 			}
 
 			if cursor.isTruncated {
@@ -346,7 +347,7 @@ func (s3a *S3ApiServer) listFilerEntries(bucket string, originalPrefix string, m
 		response = ListBucketResult{
 			Name:           bucket,
 			Prefix:         originalPrefix,
-			Marker:         originalMarker,
+			Marker:         requestMarker,
 			NextMarker:     nextMarker,
 			MaxKeys:        int(maxKeys),
 			Delimiter:      delimiter,
@@ -382,9 +383,42 @@ type ListingCursor struct {
 	prefixEndsOnDelimiter bool
 }
 
+// excludedMarkerKey returns the key an exclusive marker names that the walk's cutoff no
+// longer excludes, because a marker ending on the delimiter is trimmed to that cutoff.
+// The key is skipped as it streams, rather than spending a slot of the page and being
+// dropped from the answer afterwards, which would turn a truncated page into a final one.
+func excludedMarkerKey(requestMarker, marker string) string {
+	if requestMarker == marker {
+		return ""
+	}
+	return strings.TrimLeft(requestMarker, "/")
+}
+
+// markerSortsBeforePrefix reports whether marker is a cutoff that excludes no key
+// under prefix: the marker sorts before the prefix and is not under it, so every key
+// carrying the prefix already sorts after it. A marker that sorts after the prefix is
+// left alone: it may sit inside a partial name prefix's match set ("parent" also
+// matches "parentDir/…"), which normalizePrefixMarker handles.
+func markerSortsBeforePrefix(prefix, marker string) bool {
+	prefix = strings.TrimLeft(prefix, "/")
+	marker = strings.TrimLeft(marker, "/")
+	if marker == "" || prefix == "" {
+		return false
+	}
+	return !strings.HasPrefix(marker, prefix) && marker < prefix
+}
+
 // the prefix and marker may be in different directories
-// normalizePrefixMarker ensures the prefix and marker both starts from the same directory
-func normalizePrefixMarker(prefix, marker string) (alignedDir, alignedPrefix, alignedMarker string) {
+// normalizePrefixMarker ensures the prefix and marker both starts from the same directory.
+// prefixEndsOnDelimiter tells the walk that the prefix names one directory, whose own key
+// is in scope.
+func normalizePrefixMarker(prefix, marker string) (alignedDir, alignedPrefix, alignedMarker string, prefixEndsOnDelimiter bool) {
+	// A marker that excludes no key under the prefix is dropped, so the listing is the
+	// one with no marker at all. The response still echoes the marker the client sent.
+	if markerSortsBeforePrefix(prefix, marker) {
+		marker = ""
+	}
+	prefixEndsOnDelimiter = strings.HasSuffix(prefix, "/") && len(marker) == 0
 	// alignedDir should not end with "/"
 	// alignedDir, alignedPrefix, alignedMarker should only have "/" in middle
 	if len(marker) == 0 {
@@ -394,7 +428,7 @@ func normalizePrefixMarker(prefix, marker string) (alignedDir, alignedPrefix, al
 	}
 	marker = strings.TrimLeft(marker, "/")
 	if prefix == "" {
-		return "", "", marker
+		return "", "", marker, prefixEndsOnDelimiter
 	}
 	if marker == "" {
 		alignedDir, alignedPrefix = toDirAndName(prefix)
@@ -402,15 +436,11 @@ func normalizePrefixMarker(prefix, marker string) (alignedDir, alignedPrefix, al
 	}
 	if !strings.HasPrefix(marker, prefix) {
 		// something wrong
-		return "", prefix, marker
+		return "", prefix, marker, prefixEndsOnDelimiter
 	}
-	if strings.HasPrefix(marker, prefix+"/") {
-		alignedDir = prefix
-		alignedPrefix = ""
-		alignedMarker = marker[len(alignedDir)+1:]
-		return
-	}
-
+	// Resolve the listing dir from the prefix, not the marker: a partial name prefix like
+	// "data/a" also matches siblings such as "data/ab/", which narrowing to the marker's
+	// subtree would drop.
 	alignedDir, alignedPrefix = toDirAndName(prefix)
 	if alignedDir != "" {
 		alignedMarker = marker[len(alignedDir)+1:]
@@ -418,6 +448,20 @@ func normalizePrefixMarker(prefix, marker string) (alignedDir, alignedPrefix, al
 		alignedMarker = marker
 	}
 	return
+}
+
+func buildTruncatedNextMarker(requestDir, nextMarker string, lastEntryWasCommonPrefix bool, lastCommonPrefix string) string {
+	// The emitted CommonPrefix is already the full key path with its trailing delimiter.
+	// Rebuilding it from requestDir plus the listing prefix breaks when that prefix is a
+	// partial name, not a directory.
+	if lastEntryWasCommonPrefix && lastCommonPrefix != "" {
+		return lastCommonPrefix
+	}
+
+	if requestDir != "" {
+		return requestDir + "/" + nextMarker
+	}
+	return nextMarker
 }
 
 func toDirAndName(dirAndName string) (dir, name string) {
@@ -737,18 +781,23 @@ func compareWithDelimiter(a, b, delimiter string) bool {
 // but still finds any "bop" or later entries. We add a high ASCII character rather than incrementing
 // the last character to avoid skipping potential directory entries.
 // This is essential for correct S3 list operations with delimiters and CommonPrefixes.
-func adjustMarkerForDelimiter(marker, delimiter string) string {
+// A marker equal to the prefix names no subtree to skip: it excludes only the prefix's own
+// key. Leading slashes are insignificant here, as they are to normalizePrefixMarker.
+func adjustMarkerForDelimiter(marker, prefix, delimiter string) string {
 	if delimiter == "" || !strings.HasSuffix(marker, delimiter) {
+		return marker
+	}
+	if strings.TrimLeft(marker, "/") == strings.TrimLeft(prefix, "/") {
 		return marker
 	}
 
 	// Remove the trailing delimiter
 	// This ensures we skip all entries under the prefix but don't skip
 	// potential directory entries that start with a similar prefix
-	prefix := strings.TrimSuffix(marker, delimiter)
-	if len(prefix) == 0 {
+	trimmed := strings.TrimSuffix(marker, delimiter)
+	if len(trimmed) == 0 {
 		return marker
 	}
 
-	return prefix
+	return trimmed
 }

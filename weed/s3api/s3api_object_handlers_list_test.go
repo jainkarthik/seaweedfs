@@ -96,11 +96,12 @@ func Test_normalizePrefixMarker(t *testing.T) {
 		marker string
 	}
 	tests := []struct {
-		name              string
-		args              args
-		wantAlignedDir    string
-		wantAlignedPrefix string
-		wantAlignedMarker string
+		name                      string
+		args                      args
+		wantAlignedDir            string
+		wantAlignedPrefix         string
+		wantAlignedMarker         string
+		wantPrefixEndsOnDelimiter bool
 	}{
 		{"bucket root listing with delimiter",
 			args{"/",
@@ -108,6 +109,7 @@ func Test_normalizePrefixMarker(t *testing.T) {
 			"",
 			"",
 			"",
+			true,
 		},
 		{"prefix is a directory",
 			args{"/parentDir/data/",
@@ -115,6 +117,7 @@ func Test_normalizePrefixMarker(t *testing.T) {
 			"parentDir",
 			"data",
 			"",
+			true,
 		},
 		{"normal case",
 			args{"/parentDir/data/0",
@@ -122,6 +125,7 @@ func Test_normalizePrefixMarker(t *testing.T) {
 			"parentDir/data",
 			"0",
 			"0e/0e149049a2137b0cc12e",
+			false,
 		},
 		{"empty prefix",
 			args{"",
@@ -129,6 +133,7 @@ func Test_normalizePrefixMarker(t *testing.T) {
 			"",
 			"",
 			"parentDir/data/0e/0e149049a2137b0cc12e",
+			false,
 		},
 		{"empty directory",
 			args{"parent",
@@ -136,16 +141,82 @@ func Test_normalizePrefixMarker(t *testing.T) {
 			"",
 			"parent",
 			"parentDir/data/0e/0e149049a2137b0cc12e",
+			false,
+		},
+		{"partial name prefix, marker resumes inside a matching subdirectory",
+			args{"data/a",
+				"data/a/1"},
+			"data",
+			"a",
+			"a/1",
+			false,
+		},
+		{"partial name prefix, marker resumes inside a matching sibling directory",
+			args{"data/a",
+				"data/ab/1"},
+			"data",
+			"a",
+			"ab/1",
+			false,
+		},
+		{"top-level partial name prefix, marker resumes inside a matching subdirectory",
+			args{"a",
+				"a/1"},
+			"",
+			"a",
+			"a/1",
+			false,
+		},
+		{"marker sorts before the prefix, so it excludes nothing under it",
+			args{"parentDir/data/",
+				"parentDir"},
+			"parentDir",
+			"data",
+			"",
+			true,
+		},
+		{"marker is the prefix directory, whose own key it excludes",
+			args{"parentDir/data/",
+				"parentDir/data/"},
+			"parentDir/data",
+			"",
+			"",
+			false,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotAlignedDir, gotAlignedPrefix, gotAlignedMarker := normalizePrefixMarker(tt.args.prefix, tt.args.marker)
+			gotAlignedDir, gotAlignedPrefix, gotAlignedMarker, gotPrefixEndsOnDelimiter := normalizePrefixMarker(tt.args.prefix, tt.args.marker)
 			assert.Equalf(t, tt.wantAlignedDir, gotAlignedDir, "normalizePrefixMarker(%v, %v)", tt.args.prefix, tt.args.marker)
 			assert.Equalf(t, tt.wantAlignedPrefix, gotAlignedPrefix, "normalizePrefixMarker(%v, %v)", tt.args.prefix, tt.args.marker)
 			assert.Equalf(t, tt.wantAlignedMarker, gotAlignedMarker, "normalizePrefixMarker(%v, %v)", tt.args.prefix, tt.args.marker)
+			assert.Equalf(t, tt.wantPrefixEndsOnDelimiter, gotPrefixEndsOnDelimiter, "normalizePrefixMarker(%v, %v)", tt.args.prefix, tt.args.marker)
 		})
 	}
+}
+
+func TestBuildTruncatedNextMarker(t *testing.T) {
+	t.Run("does not duplicate prefix segment in next continuation token", func(t *testing.T) {
+		nextMarker := "export_2026-02-10_17-00-23/4156000e.jpg"
+
+		actual := buildTruncatedNextMarker("xemu", nextMarker, false, "")
+		assert.Equal(t, "xemu/export_2026-02-10_17-00-23/4156000e.jpg", actual)
+	})
+
+	t.Run("keeps common prefix marker trailing slash", func(t *testing.T) {
+		actual := buildTruncatedNextMarker("xemu", "", true, "xemu/export_2026-02-10_17-00-23/nested/")
+		assert.Equal(t, "xemu/export_2026-02-10_17-00-23/nested/", actual)
+	})
+
+	t.Run("keeps common prefix marker when request dir is empty", func(t *testing.T) {
+		actual := buildTruncatedNextMarker("", "", true, "foo/bar/")
+		assert.Equal(t, "foo/bar/", actual)
+	})
+
+	t.Run("does not fold a partial name prefix into the common prefix marker", func(t *testing.T) {
+		actual := buildTruncatedNextMarker("data", "", true, "data/ab/")
+		assert.Equal(t, "data/ab/", actual)
+	})
 }
 
 func TestAllowUnorderedParameterValidation(t *testing.T) {
