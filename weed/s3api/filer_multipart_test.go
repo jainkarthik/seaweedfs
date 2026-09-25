@@ -1,11 +1,16 @@
 package s3api
 
 import (
+	"crypto/tls"
+	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
 	"github.com/seaweedfs/seaweedfs/weed/s3api/s3err"
 	"github.com/stretchr/testify/assert"
 )
@@ -131,4 +136,81 @@ func TestGetEntryNameAndDir(t *testing.T) {
 			assert.Equal(t, tt.expectedDirEnd, dirName, "directory mismatch")
 		})
 	}
+}
+
+func TestCalculateMultipartETag(t *testing.T) {
+	// Test case: 2 parts matching AWS S3 standard multipart calculation
+	// Part 1 MD5: 436a0d2b5cf44766f8ab1fe7520821d9
+	// Part 2 MD5: 11797949a441800095985deb7e765752
+	// Expected AWS S3 ETag: b6acfe2b815be05dc6ac2bb4870fda16-2
+	p1Bytes, _ := hex.DecodeString("436a0d2b5cf44766f8ab1fe7520821d9")
+	p2Bytes, _ := hex.DecodeString("11797949a441800095985deb7e765752")
+
+	completedPartNumbers := []int{1, 2}
+	partEntries := map[int][]*filer_pb.Entry{
+		1: {
+			{
+				Name: "0001.part",
+				Attributes: &filer_pb.FuseAttributes{
+					Md5:      p1Bytes,
+					FileSize: 5 * 1024 * 1024,
+				},
+			},
+		},
+		2: {
+			{
+				Name: "0002.part",
+				Attributes: &filer_pb.FuseAttributes{
+					Md5:      p2Bytes,
+					FileSize: 1 * 1024 * 1024,
+				},
+			},
+		},
+	}
+	completedPartMap := map[int][]string{
+		1: {"\"436a0d2b5cf44766f8ab1fe7520821d9\""},
+		2: {"\"11797949a441800095985deb7e765752\""},
+	}
+
+	etag := calculateMultipartETag(completedPartNumbers, partEntries, completedPartMap, nil)
+	assert.Equal(t, "b6acfe2b815be05dc6ac2bb4870fda16-2", etag)
+
+	// Test fallback to completedPartMap when entry MD5 is missing
+	partEntriesNoMd5 := map[int][]*filer_pb.Entry{
+		1: {{Name: "0001.part", Attributes: &filer_pb.FuseAttributes{FileSize: 5 * 1024 * 1024}}},
+		2: {{Name: "0002.part", Attributes: &filer_pb.FuseAttributes{FileSize: 1 * 1024 * 1024}}},
+	}
+	etagFallback := calculateMultipartETag(completedPartNumbers, partEntriesNoMd5, completedPartMap, nil)
+	assert.Equal(t, "b6acfe2b815be05dc6ac2bb4870fda16-2", etagFallback)
+}
+
+func TestGetRequestScheme(t *testing.T) {
+	// 1. Plain HTTP
+	req := httptest.NewRequest("POST", "http://example.com/bucket/obj", nil)
+	assert.Equal(t, "http", getRequestScheme(req))
+
+	// 2. TLS connection
+	reqTLS := httptest.NewRequest("POST", "http://example.com/bucket/obj", nil)
+	reqTLS.TLS = &tls.ConnectionState{}
+	assert.Equal(t, "https", getRequestScheme(reqTLS))
+
+	// 3. X-Forwarded-Proto: https, http (multi-proxy chain)
+	reqFwdProto := httptest.NewRequest("POST", "http://example.com/bucket/obj", nil)
+	reqFwdProto.Header.Set("X-Forwarded-Proto", "https, http")
+	assert.Equal(t, "https", getRequestScheme(reqFwdProto))
+
+	// 4. RFC 7239 Forwarded header (quoted & mixed case)
+	reqForwarded := httptest.NewRequest("POST", "http://example.com/bucket/obj", nil)
+	reqForwarded.Header.Set("Forwarded", "for=192.168.1.1;Proto=\"https\";host=example.com")
+	assert.Equal(t, "https", getRequestScheme(reqForwarded))
+
+	// 5. X-Forwarded-Ssl: on
+	reqFwdSsl := httptest.NewRequest("POST", "http://example.com/bucket/obj", nil)
+	reqFwdSsl.Header.Set("X-Forwarded-Ssl", "on")
+	assert.Equal(t, "https", getRequestScheme(reqFwdSsl))
+
+	// 6. X-Url-Scheme: https
+	reqUrlScheme := httptest.NewRequest("POST", "http://example.com/bucket/obj", nil)
+	reqUrlScheme.Header.Set("X-Url-Scheme", "https")
+	assert.Equal(t, "https", getRequestScheme(reqUrlScheme))
 }

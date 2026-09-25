@@ -2,6 +2,7 @@ package s3api
 
 import (
 	"cmp"
+	"crypto/md5"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -46,15 +47,78 @@ type InitiateMultipartUploadResult struct {
 // getRequestScheme determines the URL scheme (http or https) from the request
 // Checks X-Forwarded-Proto header first (for proxies), then TLS state
 func getRequestScheme(r *http.Request) string {
-	// Check X-Forwarded-Proto header for proxied requests
+	// Check X-Forwarded-Proto header for proxied requests (may be comma-separated list: "client, proxy1")
 	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
-		return proto
+		if idx := strings.Index(proto, ","); idx != -1 {
+			proto = proto[:idx]
+		}
+		if p := strings.TrimSpace(strings.ToLower(proto)); p != "" {
+			return p
+		}
+	}
+	// Check RFC 7239 Forwarded header (e.g., proto=https or Proto="https")
+	if forwarded := r.Header.Get("Forwarded"); forwarded != "" {
+		for _, part := range strings.Split(forwarded, ";") {
+			part = strings.TrimSpace(part)
+			lower := strings.ToLower(part)
+			if strings.HasPrefix(lower, "proto=") {
+				val := strings.Trim(strings.TrimSpace(part[len("proto="):]), `"`)
+				if val != "" {
+					return strings.ToLower(val)
+				}
+			}
+		}
+	}
+	if strings.EqualFold(r.Header.Get("X-Forwarded-Ssl"), "on") ||
+		strings.EqualFold(r.Header.Get("X-Url-Scheme"), "https") ||
+		strings.EqualFold(r.Header.Get("Front-End-Https"), "on") {
+		return "https"
 	}
 	// Check if connection is TLS
 	if r.TLS != nil {
 		return "https"
 	}
+	if r.URL != nil && r.URL.Scheme != "" {
+		return r.URL.Scheme
+	}
 	return "http"
+}
+
+// calculateMultipartETag calculates the AWS S3 standard multipart ETag:
+// MD5 of concatenated 16-byte raw binary MD5 digests of each part + "-" + part_count
+func calculateMultipartETag(completedPartNumbers []int, partEntries map[int][]*filer_pb.Entry, completedPartMap map[int][]string, finalParts []*filer_pb.FileChunk) string {
+	var combinedPartMd5s []byte
+	allPartsHaveMd5 := true
+	for _, partNumber := range completedPartNumbers {
+		partEntriesByNumber := partEntries[partNumber]
+		var partMd5 []byte
+		if len(partEntriesByNumber) > 0 && len(partEntriesByNumber[0].Attributes.GetMd5()) == 16 {
+			partMd5 = partEntriesByNumber[0].Attributes.GetMd5()
+		} else if len(completedPartMap[partNumber]) > 0 {
+			partHex := strings.Trim(completedPartMap[partNumber][0], `"`)
+			if decoded, err := hex.DecodeString(partHex); err == nil && len(decoded) == 16 {
+				partMd5 = decoded
+			}
+		}
+		if len(partMd5) != 16 && len(partEntriesByNumber) > 0 {
+			partETag := filer.ETag(partEntriesByNumber[0])
+			if decoded, err := hex.DecodeString(strings.Trim(partETag, `"`)); err == nil && len(decoded) == 16 {
+				partMd5 = decoded
+			}
+		}
+		if len(partMd5) == 16 {
+			combinedPartMd5s = append(combinedPartMd5s, partMd5...)
+		} else {
+			allPartsHaveMd5 = false
+			break
+		}
+	}
+
+	if allPartsHaveMd5 && len(completedPartNumbers) > 0 {
+		sum := md5.Sum(combinedPartMd5s)
+		return fmt.Sprintf("%x-%d", sum, len(completedPartNumbers))
+	}
+	return filer.ETagChunks(finalParts)
 }
 
 func (s3a *S3ApiServer) createMultipartUpload(r *http.Request, input *s3.CreateMultipartUploadInput) (output *InitiateMultipartUploadResult, code s3err.ErrorCode) {
@@ -203,10 +267,14 @@ func (s3a *S3ApiServer) completeMultipartUpload(r *http.Request, input *s3.Compl
 			if uploadId, ok := entry.Extended[s3_constants.SeaweedFSUploadId]; ok && *input.UploadId == string(uploadId) {
 				// Location uses the S3 endpoint that the client connected to
 				// Format: scheme://s3-endpoint/bucket/object (following AWS S3 API)
+				etag := filer.ETagChunks(entry.GetChunks())
+				if savedEtag, ok := entry.Extended[s3_constants.ExtETagKey]; ok && len(savedEtag) > 0 {
+					etag = strings.Trim(string(savedEtag), `"`)
+				}
 				return &CompleteMultipartUploadResult{
 					Location: aws.String(fmt.Sprintf("%s://%s/%s/%s", getRequestScheme(r), r.Host, url.PathEscape(*input.Bucket), urlPathEscape(*input.Key))),
 					Bucket:   input.Bucket,
-					ETag:     aws.String("\"" + filer.ETagChunks(entry.GetChunks()) + "\""),
+					ETag:     aws.String("\"" + etag + "\""),
 					Key:      objectKey(input.Key),
 				}, s3err.ErrNone
 			}
@@ -356,6 +424,7 @@ func (s3a *S3ApiServer) completeMultipartUpload(r *http.Request, input *s3.Compl
 	}
 
 	entryName, dirName := s3a.getEntryNameAndDir(input)
+	etag := "\"" + calculateMultipartETag(completedPartNumbers, partEntries, completedPartMap, finalParts) + "\""
 
 	// Check if versioning is configured for this bucket BEFORE creating any files
 	versioningState, vErr := s3a.getVersioningState(*input.Bucket)
@@ -378,6 +447,7 @@ func (s3a *S3ApiServer) completeMultipartUpload(r *http.Request, input *s3.Compl
 			}
 			versionEntry.Extended[s3_constants.ExtVersionIdKey] = []byte(versionId)
 			versionEntry.Extended[s3_constants.SeaweedFSUploadId] = []byte(*input.UploadId)
+			versionEntry.Extended[s3_constants.ExtETagKey] = []byte(etag)
 			// Store parts count for x-amz-mp-parts-count header
 			versionEntry.Extended[s3_constants.SeaweedFSMultipartPartsCount] = []byte(fmt.Sprintf("%d", len(completedPartNumbers)))
 			// Store part boundaries for GetObject with PartNumber
@@ -418,7 +488,6 @@ func (s3a *S3ApiServer) completeMultipartUpload(r *http.Request, input *s3.Compl
 
 		// Construct entry with metadata for caching in .versions directory
 		// Reuse versionMtime to keep list vs. HEAD timestamps aligned
-		etag := "\"" + filer.ETagChunks(finalParts) + "\""
 		versionEntryForCache := &filer_pb.Entry{
 			Attributes: &filer_pb.FuseAttributes{
 				FileSize: uint64(offset),
@@ -446,7 +515,7 @@ func (s3a *S3ApiServer) completeMultipartUpload(r *http.Request, input *s3.Compl
 		output = &CompleteMultipartUploadResult{
 			Location:  aws.String(fmt.Sprintf("%s://%s/%s/%s", getRequestScheme(r), r.Host, url.PathEscape(*input.Bucket), urlPathEscape(*input.Key))),
 			Bucket:    input.Bucket,
-			ETag:      aws.String("\"" + filer.ETagChunks(finalParts) + "\""),
+			ETag:      aws.String(etag),
 			Key:       objectKey(input.Key),
 			VersionId: aws.String(versionId),
 		}
@@ -457,6 +526,8 @@ func (s3a *S3ApiServer) completeMultipartUpload(r *http.Request, input *s3.Compl
 				entry.Extended = make(map[string][]byte)
 			}
 			entry.Extended[s3_constants.ExtVersionIdKey] = []byte("null")
+			entry.Extended[s3_constants.SeaweedFSUploadId] = []byte(*input.UploadId)
+			entry.Extended[s3_constants.ExtETagKey] = []byte(etag)
 			// Store parts count for x-amz-mp-parts-count header
 			entry.Extended[s3_constants.SeaweedFSMultipartPartsCount] = []byte(fmt.Sprintf("%d", len(completedPartNumbers)))
 			// Store part boundaries for GetObject with PartNumber
@@ -499,7 +570,7 @@ func (s3a *S3ApiServer) completeMultipartUpload(r *http.Request, input *s3.Compl
 		output = &CompleteMultipartUploadResult{
 			Location: aws.String(fmt.Sprintf("%s://%s/%s/%s", getRequestScheme(r), r.Host, url.PathEscape(*input.Bucket), urlPathEscape(*input.Key))),
 			Bucket:   input.Bucket,
-			ETag:     aws.String("\"" + filer.ETagChunks(finalParts) + "\""),
+			ETag:     aws.String(etag),
 			Key:      objectKey(input.Key),
 			// VersionId field intentionally omitted for suspended versioning
 		}
@@ -510,6 +581,7 @@ func (s3a *S3ApiServer) completeMultipartUpload(r *http.Request, input *s3.Compl
 				entry.Extended = make(map[string][]byte)
 			}
 			entry.Extended[s3_constants.SeaweedFSUploadId] = []byte(*input.UploadId)
+			entry.Extended[s3_constants.ExtETagKey] = []byte(etag)
 			// Store parts count for x-amz-mp-parts-count header
 			entry.Extended[s3_constants.SeaweedFSMultipartPartsCount] = []byte(fmt.Sprintf("%d", len(completedPartNumbers)))
 			// Store part boundaries for GetObject with PartNumber
@@ -556,7 +628,7 @@ func (s3a *S3ApiServer) completeMultipartUpload(r *http.Request, input *s3.Compl
 		output = &CompleteMultipartUploadResult{
 			Location: aws.String(fmt.Sprintf("%s://%s/%s/%s", getRequestScheme(r), r.Host, url.PathEscape(*input.Bucket), urlPathEscape(*input.Key))),
 			Bucket:   input.Bucket,
-			ETag:     aws.String("\"" + filer.ETagChunks(finalParts) + "\""),
+			ETag:     aws.String(etag),
 			Key:      objectKey(input.Key),
 		}
 	}
@@ -667,10 +739,18 @@ func (s3a *S3ApiServer) listMultipartUploads(input *s3.ListMultipartUploadsInput
 			if *input.Prefix != "" && !strings.HasPrefix(key, *input.Prefix) {
 				continue
 			}
-			output.Upload = append(output.Upload, &s3.MultipartUpload{
+			upload := &s3.MultipartUpload{
 				Key:      objectKey(aws.String(key)),
 				UploadId: aws.String(entry.Name),
-			})
+			}
+			if entry.Attributes != nil {
+				crtime := entry.Attributes.Crtime
+				if crtime == 0 {
+					crtime = entry.Attributes.Mtime
+				}
+				upload.Initiated = aws.Time(time.Unix(crtime, 0).UTC())
+			}
+			output.Upload = append(output.Upload, upload)
 			uploadsCount += 1
 		}
 		if uploadsCount >= *input.MaxUploads {
@@ -698,10 +778,31 @@ type ListPartsResult struct {
 	UploadId             *string    `type:"string"`
 }
 
+func isMultipartUploadEntry(entry *filer_pb.Entry) bool {
+	return entry != nil && len(entry.Extended[s3_constants.ExtMultipartObjectKey]) > 0
+}
+
 func (s3a *S3ApiServer) listObjectParts(input *s3.ListPartsInput) (output *ListPartsResult, code s3err.ErrorCode) {
 	// https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListParts.html
 
 	glog.V(2).Infof("listObjectParts input %v", input)
+
+	// complete/abort delete the upload directory, but most stores list a missing
+	// directory as empty instead of erroring, so listing alone cannot tell a
+	// completed upload (NoSuchUpload on AWS) from an open upload with no parts
+	// yet (200 with an empty list). Probe the upload record instead.
+	pentry, err := s3a.getEntry(s3a.genUploadsFolder(*input.Bucket), *input.UploadId)
+	if err != nil {
+		if errors.Is(err, filer_pb.ErrNotFound) {
+			return nil, s3err.ErrNoSuchUpload
+		}
+		glog.Errorf("listObjectParts %s %s error: %v", *input.Bucket, *input.UploadId, err)
+		return nil, s3err.ErrInternalError
+	}
+	// only createMultipartUpload stamps the key; a directory a part write left behind is not an upload
+	if !isMultipartUploadEntry(pentry) {
+		return nil, s3err.ErrNoSuchUpload
+	}
 
 	output = &ListPartsResult{
 		Bucket:           input.Bucket,
