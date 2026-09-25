@@ -435,6 +435,13 @@ func (s3a *S3ApiServer) HeadBucketHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	if region := s3a.GetDataCenter(); region != "" {
+		w.Header().Set("x-amz-bucket-region", region)
+	}
+	w.Header().Set("x-amz-bucket-arn", fmt.Sprintf("arn:aws:s3:::%s", bucket))
+	w.Header().Set("x-amz-access-point-alias", "false")
+	w.Header().Set("Content-Type", "application/xml")
+
 	writeSuccessResponseEmpty(w, r)
 }
 
