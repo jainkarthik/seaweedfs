@@ -68,6 +68,7 @@ const (
 	ErrInvalidMaxDeleteObjects
 	ErrInvalidPartNumberMarker
 	ErrInvalidPart
+	ErrInvalidPartNumber
 	ErrInvalidRange
 	ErrInternalError
 	ErrInvalidCopyDest
@@ -284,6 +285,12 @@ var errorCodeResponse = map[ErrorCode]APIError{
 		Code:           "InvalidPart",
 		Description:    "One or more of the specified parts could not be found.  The part may not have been uploaded, or the specified entity tag may not match the part's entity tag.",
 		HTTPStatusCode: http.StatusBadRequest,
+	},
+
+	ErrInvalidPartNumber: {
+		Code:           "InvalidPartNumber",
+		Description:    "The requested partnumber is not satisfiable.",
+		HTTPStatusCode: http.StatusRequestedRangeNotSatisfiable,
 	},
 
 	ErrInvalidCopyDest: {
