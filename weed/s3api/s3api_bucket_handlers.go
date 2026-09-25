@@ -968,7 +968,9 @@ func (s3a *S3ApiServer) GetBucketLocationHandler(w http.ResponseWriter, r *http.
 		return
 	}
 
-	writeSuccessResponseXML(w, r, CreateBucketConfiguration{})
+	writeSuccessResponseXML(w, r, LocationConstraint{
+		Value: s3a.GetDataCenter(),
+	})
 }
 
 // GetBucketRequestPaymentHandler Get bucket location

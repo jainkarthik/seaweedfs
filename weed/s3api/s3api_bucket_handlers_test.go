@@ -251,6 +251,28 @@ func TestListAllMyBucketsResultNamespace(t *testing.T) {
 	t.Logf("Generated XML:\n%s", xmlString)
 }
 
+func TestLocationConstraintResponseXML(t *testing.T) {
+	t.Run("with region", func(t *testing.T) {
+		resp := LocationConstraint{
+			Value: "us-west-1",
+		}
+		data, err := xml.Marshal(resp)
+		require.NoError(t, err)
+		xmlStr := string(data)
+		assert.Contains(t, xmlStr, `<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/">us-west-1</LocationConstraint>`)
+	})
+
+	t.Run("empty region", func(t *testing.T) {
+		resp := LocationConstraint{
+			Value: "",
+		}
+		data, err := xml.Marshal(resp)
+		require.NoError(t, err)
+		xmlStr := string(data)
+		assert.Contains(t, xmlStr, `<LocationConstraint xmlns="http://s3.amazonaws.com/doc/2006-03-01/"></LocationConstraint>`)
+	})
+}
+
 // TestListBucketsOwnershipFiltering tests that ListBucketsHandler properly filters
 // buckets based on ownership, allowing only bucket owners (or admins) to see their buckets
 func TestListBucketsOwnershipFiltering(t *testing.T) {
