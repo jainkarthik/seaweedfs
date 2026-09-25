@@ -3,12 +3,15 @@ package s3api
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"reflect"
 	"sort"
 	"strings"
 	"testing"
 
+	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
 	"github.com/seaweedfs/seaweedfs/weed/s3api/s3_constants"
+	"github.com/seaweedfs/seaweedfs/weed/s3api/s3err"
 )
 
 type H map[string]string
@@ -703,5 +706,36 @@ func TestIsOrphanedSSES3Header(t *testing.T) {
 					tc.headerKey, result, tc.expected)
 			}
 		})
+	}
+}
+
+func TestPathToBucketObjectAndVersionUsesPathUnescape(t *testing.T) {
+	raw := "bucket/folder%2Ffile%2Bname?versionId=v%2B1"
+	decoded, err := url.PathUnescape(raw)
+	if err != nil {
+		t.Fatalf("PathUnescape failed: %v", err)
+	}
+
+	bucket, object, versionID := pathToBucketObjectAndVersion(raw, decoded)
+	if bucket != "bucket" {
+		t.Fatalf("expected bucket %q, got %q", "bucket", bucket)
+	}
+	if object != "folder/file+name" {
+		t.Fatalf("expected object %q, got %q", "folder/file+name", object)
+	}
+	if versionID != "v+1" {
+		t.Fatalf("expected versionId %q, got %q", "v+1", versionID)
+	}
+}
+
+func TestClassifyCopySourceLookupError(t *testing.T) {
+	if got := classifyCopySourceLookupError(filer_pb.ErrNotFound, nil); got != s3err.ErrNoSuchKey {
+		t.Fatalf("expected ErrNoSuchKey for missing source, got %v", got)
+	}
+	if got := classifyCopySourceLookupError(nil, &filer_pb.Entry{IsDirectory: true}); got != s3err.ErrNoSuchKey {
+		t.Fatalf("expected ErrNoSuchKey for directory source, got %v", got)
+	}
+	if got := classifyCopySourceLookupError(nil, &filer_pb.Entry{}); got != s3err.ErrNone {
+		t.Fatalf("expected ErrNone for regular source, got %v", got)
 	}
 }

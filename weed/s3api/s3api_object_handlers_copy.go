@@ -3,6 +3,7 @@ package s3api
 import (
 	"bytes"
 	"context"
+	"errors"
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
@@ -37,7 +38,7 @@ func (s3a *S3ApiServer) CopyObjectHandler(w http.ResponseWriter, r *http.Request
 
 	// Copy source path.
 	rawCopySource := r.Header.Get("X-Amz-Copy-Source")
-	cpSrcPath, err := url.QueryUnescape(rawCopySource)
+	cpSrcPath, err := url.PathUnescape(rawCopySource)
 	if err != nil {
 		// Save unescaped string as is.
 		cpSrcPath = rawCopySource
@@ -68,12 +69,13 @@ func (s3a *S3ApiServer) CopyObjectHandler(w http.ResponseWriter, r *http.Request
 		fullPath := util.FullPath(fmt.Sprintf("%s/%s/%s", s3a.option.BucketsPath, dstBucket, dstObject))
 		dir, name := fullPath.DirAndName()
 		entry, err := s3a.getEntry(dir, name)
-		if err != nil || entry.IsDirectory {
-			s3err.WriteErrorResponse(w, r, s3err.ErrInvalidCopySource)
+		if code := classifyCopySourceLookupError(err, entry); code != s3err.ErrNone {
+			s3err.WriteErrorResponse(w, r, code)
 			return
 		}
 		entry.Extended, err = processMetadataBytes(r.Header, entry.Extended, replaceMeta, replaceTagging)
-		entry.Attributes.Mtime = time.Now().Unix()
+		t := time.Now().UTC().Truncate(time.Millisecond)
+		entry.Attributes.Mtime = t.Unix()
 		if err != nil {
 			glog.Errorf("CopyObjectHandler ValidateTags error %s: %v", r.URL, err)
 			s3err.WriteErrorResponse(w, r, s3err.ErrInvalidTag)
@@ -86,7 +88,7 @@ func (s3a *S3ApiServer) CopyObjectHandler(w http.ResponseWriter, r *http.Request
 		}
 		writeSuccessResponseXML(w, r, CopyObjectResult{
 			ETag:         filer.ETag(entry),
-			LastModified: time.Now().UTC(),
+			LastModified: t,
 		})
 		return
 	}
@@ -101,7 +103,11 @@ func (s3a *S3ApiServer) CopyObjectHandler(w http.ResponseWriter, r *http.Request
 	srcVersioningState, err := s3a.getVersioningState(srcBucket)
 	if err != nil {
 		glog.Errorf("Error checking versioning state for source bucket %s: %v", srcBucket, err)
-		s3err.WriteErrorResponse(w, r, s3err.ErrInvalidCopySource)
+		if errors.Is(err, filer_pb.ErrNotFound) {
+			s3err.WriteErrorResponse(w, r, s3err.ErrNoSuchBucket)
+		} else {
+			s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
+		}
 		return
 	}
 
@@ -131,8 +137,8 @@ func (s3a *S3ApiServer) CopyObjectHandler(w http.ResponseWriter, r *http.Request
 		entry, err = s3a.getEntry(dir, name)
 	}
 
-	if err != nil || entry.IsDirectory {
-		s3err.WriteErrorResponse(w, r, s3err.ErrInvalidCopySource)
+	if code := classifyCopySourceLookupError(err, entry); code != s3err.ErrNone {
+		s3err.WriteErrorResponse(w, r, code)
 		return
 	}
 
@@ -156,10 +162,11 @@ func (s3a *S3ApiServer) CopyObjectHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	// Create new entry for destination
+	t := time.Now().UTC().Truncate(time.Millisecond)
 	dstEntry := &filer_pb.Entry{
 		Attributes: &filer_pb.FuseAttributes{
 			FileSize: entry.Attributes.FileSize,
-			Mtime:    time.Now().Unix(),
+			Mtime:    t.Unix(),
 			Crtime:   entry.Attributes.Crtime,
 			Mime:     entry.Attributes.Mime,
 		},
@@ -203,7 +210,7 @@ func (s3a *S3ApiServer) CopyObjectHandler(w http.ResponseWriter, r *http.Request
 	// to preserve the encryption header filtering. Fixes GitHub #7562.
 	processedMetadata, tagErr := processMetadataBytes(r.Header, dstEntry.Extended, replaceMeta, replaceTagging)
 	if tagErr != nil {
-		s3err.WriteErrorResponse(w, r, s3err.ErrInvalidCopySource)
+		s3err.WriteErrorResponse(w, r, s3err.ErrInvalidTag)
 		return
 	}
 
@@ -366,7 +373,7 @@ func (s3a *S3ApiServer) CopyObjectHandler(w http.ResponseWriter, r *http.Request
 
 	response := CopyObjectResult{
 		ETag:         etag,
-		LastModified: time.Now().UTC(),
+		LastModified: t,
 	}
 
 	writeSuccessResponseXML(w, r, response)
@@ -401,7 +408,7 @@ func pathToBucketObjectAndVersion(rawPath, decodedPath string) (bucket, object, 
 				versionId = values.Get("versionId")
 
 				rawPathNoQuery := rawPath[:idx]
-				if unescaped, err := url.QueryUnescape(rawPathNoQuery); err == nil {
+				if unescaped, err := url.PathUnescape(rawPathNoQuery); err == nil {
 					pathForBucket = unescaped
 				} else {
 					pathForBucket = rawPathNoQuery
@@ -415,6 +422,19 @@ func pathToBucketObjectAndVersion(rawPath, decodedPath string) (bucket, object, 
 
 	bucket, object = pathToBucketAndObject(pathForBucket)
 	return bucket, object, versionId
+}
+
+func classifyCopySourceLookupError(err error, entry *filer_pb.Entry) s3err.ErrorCode {
+	if err == nil {
+		if entry == nil || entry.IsDirectory {
+			return s3err.ErrNoSuchKey
+		}
+		return s3err.ErrNone
+	}
+	if errors.Is(err, filer_pb.ErrNotFound) {
+		return s3err.ErrNoSuchKey
+	}
+	return s3err.ErrInternalError
 }
 
 type CopyPartResult struct {
@@ -433,7 +453,7 @@ func (s3a *S3ApiServer) CopyObjectPartHandler(w http.ResponseWriter, r *http.Req
 	glog.V(4).Infof("CopyObjectPart: Raw copy source header=%q", rawCopySource)
 
 	// Try URL unescaping - AWS SDK sends URL-encoded copy sources
-	cpSrcPath, err := url.QueryUnescape(rawCopySource)
+	cpSrcPath, err := url.PathUnescape(rawCopySource)
 	if err != nil {
 		// If unescaping fails, log and use original
 		glog.V(4).Infof("CopyObjectPart: Failed to unescape copy source %q: %v, using as-is", rawCopySource, err)
@@ -482,7 +502,11 @@ func (s3a *S3ApiServer) CopyObjectPartHandler(w http.ResponseWriter, r *http.Req
 	srcVersioningState, err := s3a.getVersioningState(srcBucket)
 	if err != nil {
 		glog.Errorf("Error checking versioning state for source bucket %s: %v", srcBucket, err)
-		s3err.WriteErrorResponse(w, r, s3err.ErrInvalidCopySource)
+		if errors.Is(err, filer_pb.ErrNotFound) {
+			s3err.WriteErrorResponse(w, r, s3err.ErrNoSuchBucket)
+		} else {
+			s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
+		}
 		return
 	}
 
@@ -512,8 +536,8 @@ func (s3a *S3ApiServer) CopyObjectPartHandler(w http.ResponseWriter, r *http.Req
 		entry, err = s3a.getEntry(dir, name)
 	}
 
-	if err != nil || entry.IsDirectory {
-		s3err.WriteErrorResponse(w, r, s3err.ErrInvalidCopySource)
+	if code := classifyCopySourceLookupError(err, entry); code != s3err.ErrNone {
+		s3err.WriteErrorResponse(w, r, code)
 		return
 	}
 
@@ -548,18 +572,22 @@ func (s3a *S3ApiServer) CopyObjectPartHandler(w http.ResponseWriter, r *http.Req
 		partSize = uint64(endOffset - startOffset + 1)
 	}
 
+	t := time.Now().UTC().Truncate(time.Millisecond)
 	dstEntry := &filer_pb.Entry{
 		Attributes: &filer_pb.FuseAttributes{
 			FileSize: partSize,
-			Mtime:    time.Now().Unix(),
-			Crtime:   time.Now().Unix(),
+			Mtime:    t.Unix(),
+			Crtime:   t.Unix(),
 			Mime:     entry.Attributes.Mime,
 		},
 		Extended: make(map[string][]byte),
 	}
 
 	// Handle zero-size files or empty ranges
-	if entry.Attributes.FileSize == 0 || endOffset < startOffset {
+	if rangeHeader != "" && (entry.Attributes.FileSize == 0 || uint64(startOffset) >= entry.Attributes.FileSize || uint64(endOffset) >= entry.Attributes.FileSize || endOffset < startOffset) {
+		s3err.WriteErrorResponse(w, r, s3err.ErrInvalidRange)
+		return
+	} else if entry.Attributes.FileSize == 0 || endOffset < startOffset {
 		// For zero-size files or invalid ranges, create an empty part with size 0
 		dstEntry.Attributes.FileSize = 0
 		dstEntry.Chunks = nil
@@ -600,8 +628,8 @@ func (s3a *S3ApiServer) CopyObjectPartHandler(w http.ResponseWriter, r *http.Req
 		FullPath: partPath,
 		Attr: filer.Attr{
 			FileSize: dstEntry.Attributes.FileSize,
-			Mtime:    time.Unix(dstEntry.Attributes.Mtime, 0),
-			Crtime:   time.Unix(dstEntry.Attributes.Crtime, 0),
+			Mtime:    t,
+			Crtime:   t,
 			Mime:     dstEntry.Attributes.Mime,
 		},
 		Chunks: dstEntry.Chunks,
@@ -612,7 +640,7 @@ func (s3a *S3ApiServer) CopyObjectPartHandler(w http.ResponseWriter, r *http.Req
 
 	response := CopyPartResult{
 		ETag:         etag,
-		LastModified: time.Now().UTC(),
+		LastModified: t,
 	}
 
 	writeSuccessResponseXML(w, r, response)
