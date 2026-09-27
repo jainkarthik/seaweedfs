@@ -714,13 +714,22 @@ func (s3a *S3ApiServer) listMultipartUploads(input *s3.ListMultipartUploadsInput
 	glog.V(2).Infof("listMultipartUploads input %v", input)
 
 	output = &ListMultipartUploadsResult{
-		Bucket:       input.Bucket,
-		Delimiter:    input.Delimiter,
-		EncodingType: input.EncodingType,
-		KeyMarker:    input.KeyMarker,
-		MaxUploads:   input.MaxUploads,
-		Prefix:       input.Prefix,
-		IsTruncated:  aws.Bool(false),
+		Bucket:      input.Bucket,
+		KeyMarker:   input.KeyMarker,
+		MaxUploads:  input.MaxUploads,
+		IsTruncated: aws.Bool(false),
+	}
+	// Delimiter/EncodingType/Prefix are only echoed back when the client actually
+	// requested them; AWS omits these elements entirely when unset, whereas a
+	// pointer to an empty string would still render as an empty XML tag.
+	if input.Delimiter != nil && *input.Delimiter != "" {
+		output.Delimiter = input.Delimiter
+	}
+	if input.EncodingType != nil && *input.EncodingType != "" {
+		output.EncodingType = input.EncodingType
+	}
+	if input.Prefix != nil && *input.Prefix != "" {
+		output.Prefix = input.Prefix
 	}
 
 	entries, _, err := s3a.list(s3a.genUploadsFolder(*input.Bucket), "", *input.UploadIdMarker, false, math.MaxInt32)
@@ -740,8 +749,14 @@ func (s3a *S3ApiServer) listMultipartUploads(input *s3.ListMultipartUploadsInput
 				continue
 			}
 			upload := &s3.MultipartUpload{
-				Key:      objectKey(aws.String(key)),
-				UploadId: aws.String(entry.Name),
+				Key:          objectKey(aws.String(key)),
+				UploadId:     aws.String(entry.Name),
+				StorageClass: aws.String("STANDARD"),
+			}
+			if ownerId := string(entry.Extended[s3_constants.ExtAmzOwnerKey]); ownerId != "" {
+				displayName := s3a.iam.GetAccountNameById(ownerId)
+				upload.Initiator = &s3.Initiator{ID: aws.String(ownerId), DisplayName: aws.String(displayName)}
+				upload.Owner = &s3.Owner{ID: aws.String(ownerId)}
 			}
 			if entry.Attributes != nil {
 				crtime := entry.Attributes.Crtime
@@ -755,6 +770,9 @@ func (s3a *S3ApiServer) listMultipartUploads(input *s3.ListMultipartUploadsInput
 		}
 		if uploadsCount >= *input.MaxUploads {
 			output.IsTruncated = aws.Bool(true)
+			if len(output.Upload) > 0 {
+				output.NextKeyMarker = output.Upload[len(output.Upload)-1].Key
+			}
 			output.NextUploadIdMarker = aws.String(entry.Name)
 			break
 		}
@@ -767,15 +785,17 @@ type ListPartsResult struct {
 	XMLName xml.Name `xml:"http://s3.amazonaws.com/doc/2006-03-01/ ListPartsResult"`
 
 	// copied from s3.ListPartsOutput, the Parts is not converting to <Part></Part>
-	Bucket               *string    `type:"string"`
-	IsTruncated          *bool      `type:"boolean"`
-	Key                  *string    `min:"1" type:"string"`
-	MaxParts             *int64     `type:"integer"`
-	NextPartNumberMarker *int64     `type:"integer"`
-	PartNumberMarker     *int64     `type:"integer"`
-	Part                 []*s3.Part `locationName:"Part" type:"list" flattened:"true"`
-	StorageClass         *string    `type:"string" enum:"StorageClass"`
-	UploadId             *string    `type:"string"`
+	Bucket               *string       `type:"string"`
+	Initiator            *s3.Initiator `type:"structure"`
+	IsTruncated          *bool         `type:"boolean"`
+	Key                  *string       `min:"1" type:"string"`
+	MaxParts             *int64        `type:"integer"`
+	NextPartNumberMarker *int64        `type:"integer"`
+	Owner                *s3.Owner     `type:"structure"`
+	PartNumberMarker     *int64        `type:"integer"`
+	Part                 []*s3.Part    `locationName:"Part" type:"list" flattened:"true"`
+	StorageClass         *string       `type:"string" enum:"StorageClass"`
+	UploadId             *string       `type:"string"`
 }
 
 func isMultipartUploadEntry(entry *filer_pb.Entry) bool {
@@ -812,6 +832,11 @@ func (s3a *S3ApiServer) listObjectParts(input *s3.ListPartsInput) (output *ListP
 		PartNumberMarker: input.PartNumberMarker, // the part number starts after this, exclusive
 		StorageClass:     aws.String("STANDARD"),
 	}
+	if ownerId := string(pentry.Extended[s3_constants.ExtAmzOwnerKey]); ownerId != "" {
+		displayName := s3a.iam.GetAccountNameById(ownerId)
+		output.Initiator = &s3.Initiator{ID: aws.String(ownerId), DisplayName: aws.String(displayName)}
+		output.Owner = &s3.Owner{ID: aws.String(ownerId)}
+	}
 
 	entries, isLast, err := s3a.list(s3a.genUploadsFolder(*input.Bucket)+"/"+*input.UploadId, "", fmt.Sprintf("%04d%s", *input.PartNumberMarker, multipartExt), false, uint32(*input.MaxParts))
 	if err != nil {
@@ -841,9 +866,10 @@ func (s3a *S3ApiServer) listObjectParts(input *s3.ListPartsInput) (output *ListP
 			output.Part = append(output.Part, part)
 			glog.V(3).Infof("listObjectParts: Added part %d, size=%d, etag=%s",
 				partNumber, filer.FileSize(entry), partETag)
-			if !isLast {
-				output.NextPartNumberMarker = aws.Int64(int64(partNumber))
-			}
+			// AWS always returns NextPartNumberMarker as the last part number in the
+			// response (even when IsTruncated is false), not only when there are more
+			// pages; match that so ListParts responses are byte-for-byte comparable.
+			output.NextPartNumberMarker = aws.Int64(int64(partNumber))
 		}
 	}
 

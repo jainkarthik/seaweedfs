@@ -26,9 +26,12 @@ import (
 )
 
 const (
-	maxObjectListSizeLimit = 1000  // Limit number of objects in a listObjectsResponse.
-	maxUploadsList         = 10000 // Limit number of uploads in a listUploadsResponse.
-	maxPartsList           = 10000 // Limit number of parts in a listPartsResponse.
+	maxObjectListSizeLimit = 1000 // Limit number of objects in a listObjectsResponse.
+	// AWS S3 defaults MaxUploads/MaxParts to 1000 when the client does not
+	// specify max-uploads/max-parts; matching that default keeps ListMultipartUploads
+	// and ListParts responses byte-for-byte comparable with AWS.
+	maxUploadsList = 1000 // Limit number of uploads in a listUploadsResponse.
+	maxPartsList   = 1000 // Limit number of parts in a listPartsResponse.
 )
 
 // NewMultipartUploadHandler - New multipart upload.
