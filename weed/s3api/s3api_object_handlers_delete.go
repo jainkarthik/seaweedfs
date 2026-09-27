@@ -49,6 +49,22 @@ func (s3a *S3ApiServer) DeleteObjectHandler(w http.ResponseWriter, r *http.Reque
 		auditLog = s3err.GetAccessLog(r, http.StatusNoContent, s3err.ErrNone)
 	}
 
+	// A trailing-slash key is a directory marker in every bucket, versioned or not, and
+	// is deleted the same way: the raw delete cannot handle a directory that still
+	// has children, and versioning has nothing to add to a key that is not an object.
+	if versionId == "" && strings.HasSuffix(object, "/") {
+		if errCode := s3a.deleteDirectoryMarker(bucket, object); errCode != s3err.ErrNone {
+			s3err.WriteErrorResponse(w, r, errCode)
+			return
+		}
+		if auditLog != nil {
+			auditLog.Key = strings.TrimPrefix(object, "/")
+			s3err.PostAccessLog(*auditLog)
+		}
+		writeSuccessResponseEmpty(w, r)
+		return
+	}
+
 	if versioningConfigured {
 		// Handle versioned delete based on specific versioning state
 		if versionId != "" {
@@ -253,6 +269,25 @@ func (s3a *S3ApiServer) DeleteMultipleObjectsHandler(w http.ResponseWriter, r *h
 
 			var deleteVersionId string
 			var isDeleteMarker bool
+
+			if object.VersionId == "" && strings.HasSuffix(object.Key, "/") {
+				errCode := s3a.deleteDirectoryMarker(bucket, object.Key)
+				if errCode != s3err.ErrNone {
+					deleteErrors = append(deleteErrors, DeleteError{
+						Code:      s3err.GetAPIError(errCode).Code,
+						Message:   s3err.GetAPIError(errCode).Description,
+						Key:       object.Key,
+						VersionId: object.VersionId,
+					})
+				} else if !deleteObjects.Quiet {
+					deletedObjects = append(deletedObjects, object)
+				}
+				if auditLog != nil {
+					auditLog.Key = object.Key
+					s3err.PostAccessLog(*auditLog)
+				}
+				continue
+			}
 
 			if versioningConfigured {
 				// Handle versioned delete based on specific versioning state
