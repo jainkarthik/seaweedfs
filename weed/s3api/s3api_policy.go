@@ -16,7 +16,8 @@ const (
 
 // Lifecycle - Configuration for bucket lifecycle.
 type Lifecycle struct {
-	XMLName xml.Name `xml:"http://s3.amazonaws.com/doc/2006-03-01/ LifecycleConfiguration"`
+	XMLName xml.Name `xml:"LifecycleConfiguration"`
+	Xmlns   string   `xml:"xmlns,attr,omitempty"`
 	Rules   []Rule   `xml:"Rule"`
 }
 

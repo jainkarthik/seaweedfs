@@ -882,7 +882,9 @@ func (s3a *S3ApiServer) GetBucketLifecycleConfigurationHandler(w http.ResponseWr
 		return
 	}
 
-	response := Lifecycle{}
+	response := Lifecycle{
+		Xmlns: s3_constants.S3Namespace,
+	}
 	// Sort locationPrefixes to ensure consistent ordering of lifecycle rules
 	var locationPrefixes []string
 	for locationPrefix := range ttls {

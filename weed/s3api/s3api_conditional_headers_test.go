@@ -425,8 +425,8 @@ func TestConditionalHeadersForReads(t *testing.T) {
 			}
 		})
 
-		// Test If-Match with non-existent object (should return 412)
-		t.Run("IfMatch_ObjectNotExists_ShouldReturn412", func(t *testing.T) {
+		// Test If-Match with non-existent object (should return NoSuchKey/404 per AWS S3 spec)
+		t.Run("IfMatch_ObjectNotExists_ShouldReturn404", func(t *testing.T) {
 			getter := createMockEntryGetter(nil) // No object
 
 			req := createTestGetRequest(bucket, object)
@@ -434,8 +434,8 @@ func TestConditionalHeadersForReads(t *testing.T) {
 
 			s3a := NewS3ApiServerForTest()
 			errCode := s3a.checkConditionalHeadersForReadsWithGetter(getter, req, bucket, object)
-			if errCode.ErrorCode != s3err.ErrPreconditionFailed {
-				t.Errorf("Expected ErrPreconditionFailed when object doesn't exist with If-Match, got %v", errCode)
+			if errCode.ErrorCode != s3err.ErrNoSuchKey {
+				t.Errorf("Expected ErrNoSuchKey when object doesn't exist with If-Match, got %v", errCode)
 			}
 		})
 
@@ -453,8 +453,8 @@ func TestConditionalHeadersForReads(t *testing.T) {
 			}
 		})
 
-		// Test If-Unmodified-Since with non-existent object (should return 412)
-		t.Run("IfUnmodifiedSince_ObjectNotExists_ShouldReturn412", func(t *testing.T) {
+		// Test If-Unmodified-Since with non-existent object (should return NoSuchKey/404 per AWS S3 spec)
+		t.Run("IfUnmodifiedSince_ObjectNotExists_ShouldReturn404", func(t *testing.T) {
 			getter := createMockEntryGetter(nil) // No object
 
 			req := createTestGetRequest(bucket, object)
@@ -462,8 +462,8 @@ func TestConditionalHeadersForReads(t *testing.T) {
 
 			s3a := NewS3ApiServerForTest()
 			errCode := s3a.checkConditionalHeadersForReadsWithGetter(getter, req, bucket, object)
-			if errCode.ErrorCode != s3err.ErrPreconditionFailed {
-				t.Errorf("Expected ErrPreconditionFailed when object doesn't exist with If-Unmodified-Since, got %v", errCode)
+			if errCode.ErrorCode != s3err.ErrNoSuchKey {
+				t.Errorf("Expected ErrNoSuchKey when object doesn't exist with If-Unmodified-Since, got %v", errCode)
 			}
 		})
 	})
