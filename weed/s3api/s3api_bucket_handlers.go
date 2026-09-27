@@ -111,9 +111,10 @@ func (s3a *S3ApiServer) ListBucketsHandler(w http.ResponseWriter, r *http.Reques
 	}
 
 	response = ListAllMyBucketsResult{
+		// DisplayName is intentionally omitted: modern AWS S3 accounts no longer
+		// return it in ListBuckets responses, only the owner ID.
 		Owner: CanonicalUser{
-			ID:          identityId,
-			DisplayName: identityId,
+			ID: identityId,
 		},
 		Buckets: listBuckets,
 	}
@@ -785,9 +786,10 @@ func (s3a *S3ApiServer) GetBucketAclHandler(w http.ResponseWriter, r *http.Reque
 	}
 	ownerDisplayName := s3a.iam.GetAccountNameById(ownerId)
 	response := AccessControlPolicy{
+		// DisplayName is intentionally omitted: AWS S3 no longer returns it on
+		// GetBucketAcl responses, only the owner ID.
 		Owner: CanonicalUser{
-			ID:          ownerId,
-			DisplayName: ownerDisplayName,
+			ID: ownerId,
 		},
 		AccessControlList: buildAccessControlList(s3a.iam, storedGrants, ownerId, ownerDisplayName),
 	}

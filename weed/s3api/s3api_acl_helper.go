@@ -321,15 +321,16 @@ func ValidateAndTransferGrants(accountManager AccountManager, grants []*s3.Grant
 // buildAccessControlList converts stored ACP grants into the XML response form.
 // When no grants are stored it falls back to a single full-control grant for the
 // owner, matching AWS's default private ACL.
+// DisplayName is intentionally not populated on the Grantee: modern AWS S3
+// accounts omit it from ACL responses, returning only the canonical ID.
 func buildAccessControlList(accountManager AccountManager, grants []*s3.Grant, ownerId, ownerDisplayName string) AccessControlList {
 	if len(grants) == 0 {
 		return AccessControlList{Grant: []Grant{{
 			Grantee: Grantee{
-				ID:          ownerId,
-				DisplayName: ownerDisplayName,
-				Type:        "CanonicalUser",
-				XMLXSI:      "CanonicalUser",
-				XMLNS:       "http://www.w3.org/2001/XMLSchema-instance",
+				ID:     ownerId,
+				Type:   "CanonicalUser",
+				XMLXSI: "CanonicalUser",
+				XMLNS:  "http://www.w3.org/2001/XMLSchema-instance",
 			},
 			Permission: Permission(s3_constants.PermissionFullControl),
 		}}}
@@ -346,7 +347,6 @@ func buildAccessControlList(accountManager AccountManager, grants []*s3.Grant, o
 			}
 			if grant.Grantee.ID != nil {
 				localGrant.Grantee.ID = *grant.Grantee.ID
-				localGrant.Grantee.DisplayName = accountManager.GetAccountNameById(*grant.Grantee.ID)
 			}
 			if grant.Grantee.URI != nil {
 				localGrant.Grantee.URI = *grant.Grantee.URI

@@ -10,9 +10,12 @@ type LocationConstraint struct {
 }
 
 type Grantee struct {
-	XMLNS       string `xml:"xmlns:xsi,attr"`
-	XMLXSI      string `xml:"xsi:type,attr"`
-	Type        string `xml:"Type"`
+	XMLNS  string `xml:"xmlns:xsi,attr"`
+	XMLXSI string `xml:"xsi:type,attr"`
+	// Type is not serialized: the S3 XML schema conveys the grantee type solely
+	// via the xsi:type attribute (XMLXSI above), not as a child element. Keeping
+	// the field (unexported from XML via xml:"-") lets Go code still read/set it.
+	Type        string `xml:"-"`
 	ID          string `xml:"ID,omitempty"`
 	DisplayName string `xml:"DisplayName,omitempty"`
 	URI         string `xml:"URI,omitempty"`

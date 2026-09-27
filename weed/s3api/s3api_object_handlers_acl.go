@@ -104,10 +104,11 @@ func (s3a *S3ApiServer) GetObjectAclHandler(w http.ResponseWriter, r *http.Reque
 	objectOwnerDisplayName = s3a.iam.GetAccountNameById(objectOwner)
 
 	// Build ACL response from stored ACL metadata (or the owner's default grant).
+	// DisplayName is intentionally omitted: AWS S3 no longer returns it on
+	// GetObjectAcl responses, only the owner ID.
 	response := AccessControlPolicy{
 		Owner: CanonicalUser{
-			ID:          objectOwner,
-			DisplayName: objectOwnerDisplayName,
+			ID: objectOwner,
 		},
 		AccessControlList: buildAccessControlList(s3a.iam, GetAcpGrants(entry.Extended), objectOwner, objectOwnerDisplayName),
 	}
