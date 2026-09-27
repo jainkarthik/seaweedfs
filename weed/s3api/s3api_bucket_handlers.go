@@ -914,6 +914,10 @@ func (s3a *S3ApiServer) GetBucketLifecycleConfigurationHandler(w http.ResponseWr
 	writeSuccessResponseXML(w, r, response)
 }
 
+const (
+	maxBucketLifecycleConfigurationSize = 64 * 1024
+)
+
 // PutBucketLifecycleConfigurationHandler Put Bucket Lifecycle configuration
 // https://docs.aws.amazon.com/AmazonS3/latest/API/API_PutBucketLifecycleConfiguration.html
 func (s3a *S3ApiServer) PutBucketLifecycleConfigurationHandler(w http.ResponseWriter, r *http.Request) {
@@ -926,8 +930,19 @@ func (s3a *S3ApiServer) PutBucketLifecycleConfigurationHandler(w http.ResponseWr
 		return
 	}
 
+	lifecycleXML, err := readRequestBody(r, maxBucketLifecycleConfigurationSize)
+	if err != nil {
+		glog.Warningf("PutBucketLifecycleConfigurationHandler read body: %s", err)
+		if errors.Is(err, errRequestBodyTooLarge) {
+			s3err.WriteErrorResponse(w, r, s3err.ErrEntityTooLarge)
+			return
+		}
+		s3err.WriteErrorResponse(w, r, s3err.ErrMalformedXML)
+		return
+	}
+
 	lifeCycleConfig := Lifecycle{}
-	if err := xmlDecoder(r.Body, &lifeCycleConfig, r.ContentLength); err != nil {
+	if err := xml.Unmarshal(lifecycleXML, &lifeCycleConfig); err != nil {
 		glog.Warningf("PutBucketLifecycleConfigurationHandler xml decode: %s", err)
 		s3err.WriteErrorResponse(w, r, s3err.ErrMalformedXML)
 		return

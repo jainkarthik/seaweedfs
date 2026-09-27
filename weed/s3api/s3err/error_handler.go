@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -19,6 +20,8 @@ type mimeType string
 const (
 	mimeNone mimeType = ""
 	MimeXML  mimeType = "application/xml"
+
+	errorResponseBodyDrainTimeout = 30 * time.Second
 )
 
 func WriteAwsXMLResponse(w http.ResponseWriter, r *http.Request, statusCode int, result interface{}) {
@@ -41,6 +44,10 @@ func WriteEmptyResponse(w http.ResponseWriter, r *http.Request, statusCode int) 
 }
 
 func WriteErrorResponse(w http.ResponseWriter, r *http.Request, errorCode ErrorCode) {
+	WriteErrorResponseWithMessage(w, r, errorCode, "")
+}
+
+func WriteErrorResponseWithMessage(w http.ResponseWriter, r *http.Request, errorCode ErrorCode, message string) {
 	vars := mux.Vars(r)
 	bucket := vars["bucket"]
 	object := vars["object"]
@@ -50,8 +57,23 @@ func WriteErrorResponse(w http.ResponseWriter, r *http.Request, errorCode ErrorC
 
 	apiError := GetAPIError(errorCode)
 	errorResponse := getRESTErrorResponse(apiError, r.URL.Path, bucket, object)
+	if message != "" {
+		errorResponse.Message = message
+	}
+	drainRequestBody(w, r)
 	WriteXMLResponse(w, r, apiError.HTTPStatusCode, errorResponse)
 	PostLog(r, apiError.HTTPStatusCode, errorCode)
+}
+
+func drainRequestBody(w http.ResponseWriter, r *http.Request) {
+	if r == nil || r.Body == nil || r.Body == http.NoBody {
+		return
+	}
+	rc := http.NewResponseController(w)
+	if err := rc.SetReadDeadline(time.Now().Add(errorResponseBodyDrainTimeout)); err == nil {
+		defer rc.SetReadDeadline(time.Time{})
+	}
+	_, _ = io.Copy(io.Discard, r.Body)
 }
 
 func getRESTErrorResponse(err APIError, resource string, bucket, object string) RESTErrorResponse {
