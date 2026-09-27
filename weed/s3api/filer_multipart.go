@@ -714,10 +714,11 @@ func (s3a *S3ApiServer) listMultipartUploads(input *s3.ListMultipartUploadsInput
 	glog.V(2).Infof("listMultipartUploads input %v", input)
 
 	output = &ListMultipartUploadsResult{
-		Bucket:      input.Bucket,
-		KeyMarker:   input.KeyMarker,
-		MaxUploads:  input.MaxUploads,
-		IsTruncated: aws.Bool(false),
+		Bucket:         input.Bucket,
+		KeyMarker:      input.KeyMarker,
+		UploadIdMarker: input.UploadIdMarker,
+		MaxUploads:     input.MaxUploads,
+		IsTruncated:    aws.Bool(false),
 	}
 	// Delimiter/EncodingType/Prefix are only echoed back when the client actually
 	// requested them; AWS omits these elements entirely when unset, whereas a
@@ -770,12 +771,15 @@ func (s3a *S3ApiServer) listMultipartUploads(input *s3.ListMultipartUploadsInput
 		}
 		if uploadsCount >= *input.MaxUploads {
 			output.IsTruncated = aws.Bool(true)
-			if len(output.Upload) > 0 {
-				output.NextKeyMarker = output.Upload[len(output.Upload)-1].Key
-			}
-			output.NextUploadIdMarker = aws.String(entry.Name)
 			break
 		}
+	}
+
+	// AWS always echoes NextKeyMarker/NextUploadIdMarker based on the last
+	// returned Upload entry, regardless of whether the result is truncated.
+	if lastUpload := len(output.Upload) - 1; lastUpload >= 0 {
+		output.NextKeyMarker = output.Upload[lastUpload].Key
+		output.NextUploadIdMarker = output.Upload[lastUpload].UploadId
 	}
 
 	return
