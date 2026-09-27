@@ -172,6 +172,9 @@ func (s3a *S3ApiServer) CopyObjectHandler(w http.ResponseWriter, r *http.Request
 		},
 		Extended: make(map[string][]byte),
 	}
+	if entry.Attributes != nil && len(entry.Attributes.Md5) > 0 {
+		dstEntry.Attributes.Md5 = append([]byte(nil), entry.Attributes.Md5...)
+	}
 
 	// Copy extended attributes from source, filtering out conflicting encryption metadata
 	// Pre-compute encryption state once for efficiency
@@ -244,6 +247,9 @@ func (s3a *S3ApiServer) CopyObjectHandler(w http.ResponseWriter, r *http.Request
 				}
 			}
 		}
+		if len(dstEntry.Content) > 0 && len(dstEntry.Attributes.Md5) == 0 {
+			dstEntry.Attributes.Md5 = util.Md5(dstEntry.Content)
+		}
 	} else {
 		// Use unified copy strategy approach
 		dstChunks, dstMetadata, copyErr := s3a.executeUnifiedCopyStrategy(entry, r, dstBucket, srcObject, dstObject)
@@ -290,18 +296,8 @@ func (s3a *S3ApiServer) CopyObjectHandler(w http.ResponseWriter, r *http.Request
 		dstEntry.Extended[s3_constants.ExtVersionIdKey] = []byte(dstVersionId)
 
 		// Calculate ETag for versioning
-		filerEntry := &filer.Entry{
-			FullPath: util.FullPath(fmt.Sprintf("%s/%s/%s", s3a.option.BucketsPath, dstBucket, dstObject)),
-			Attr: filer.Attr{
-				FileSize: dstEntry.Attributes.FileSize,
-				Mtime:    time.Unix(dstEntry.Attributes.Mtime, 0),
-				Crtime:   time.Unix(dstEntry.Attributes.Crtime, 0),
-				Mime:     dstEntry.Attributes.Mime,
-			},
-			Chunks: dstEntry.Chunks,
-		}
-		etag = filer.ETagEntry(filerEntry)
-		if !strings.HasPrefix(etag, "\"") {
+		etag = copyEntryETag(dstEntry)
+		if etag != "" && !strings.HasPrefix(etag, "\"") {
 			etag = "\"" + etag + "\""
 		}
 		dstEntry.Extended[s3_constants.ExtETagKey] = []byte(etag)
@@ -314,6 +310,7 @@ func (s3a *S3ApiServer) CopyObjectHandler(w http.ResponseWriter, r *http.Request
 		if err := s3a.mkFile(bucketDir, versionObjectPath, dstEntry.Chunks, func(entry *filer_pb.Entry) {
 			entry.Attributes = dstEntry.Attributes
 			entry.Extended = dstEntry.Extended
+			entry.Content = dstEntry.Content
 		}); err != nil {
 			s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
 			return
@@ -346,27 +343,25 @@ func (s3a *S3ApiServer) CopyObjectHandler(w http.ResponseWriter, r *http.Request
 			}
 		}
 
+		// Calculate ETag
+		etag = copyEntryETag(dstEntry)
+		if etag != "" && !strings.HasPrefix(etag, "\"") {
+			etag = "\"" + etag + "\""
+		}
+		if dstEntry.Extended == nil {
+			dstEntry.Extended = make(map[string][]byte)
+		}
+		dstEntry.Extended[s3_constants.ExtETagKey] = []byte(etag)
+
 		// Create the new file
 		if err := s3a.mkFile(dstDir, dstName, dstEntry.Chunks, func(entry *filer_pb.Entry) {
 			entry.Attributes = dstEntry.Attributes
 			entry.Extended = dstEntry.Extended
+			entry.Content = dstEntry.Content
 		}); err != nil {
 			s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
 			return
 		}
-
-		// Calculate ETag
-		filerEntry := &filer.Entry{
-			FullPath: dstPath,
-			Attr: filer.Attr{
-				FileSize: dstEntry.Attributes.FileSize,
-				Mtime:    time.Unix(dstEntry.Attributes.Mtime, 0),
-				Crtime:   time.Unix(dstEntry.Attributes.Crtime, 0),
-				Mime:     dstEntry.Attributes.Mime,
-			},
-			Chunks: dstEntry.Chunks,
-		}
-		etag = filer.ETagEntry(filerEntry)
 	}
 
 	setEtag(w, etag)
@@ -623,19 +618,10 @@ func (s3a *S3ApiServer) CopyObjectPartHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	// Calculate ETag for the part
-	partPath := util.FullPath(uploadDir + "/" + partName)
-	filerEntry := &filer.Entry{
-		FullPath: partPath,
-		Attr: filer.Attr{
-			FileSize: dstEntry.Attributes.FileSize,
-			Mtime:    t,
-			Crtime:   t,
-			Mime:     dstEntry.Attributes.Mime,
-		},
-		Chunks: dstEntry.Chunks,
+	etag := copyEntryETag(dstEntry)
+	if etag != "" && !strings.HasPrefix(etag, "\"") {
+		etag = "\"" + etag + "\""
 	}
-
-	etag := filer.ETagEntry(filerEntry)
 	setEtag(w, etag)
 
 	response := CopyPartResult{
@@ -1064,19 +1050,7 @@ func (s3a *S3ApiServer) copyChunksForRange(entry *filer_pb.Entry, startOffset, e
 
 // validateConditionalCopyHeaders validates the conditional copy headers against the source entry
 func (s3a *S3ApiServer) validateConditionalCopyHeaders(r *http.Request, entry *filer_pb.Entry) s3err.ErrorCode {
-	// Calculate ETag for the source entry
-	srcPath := util.FullPath(fmt.Sprintf("%s/%s", r.URL.Path, entry.Name))
-	filerEntry := &filer.Entry{
-		FullPath: srcPath,
-		Attr: filer.Attr{
-			FileSize: entry.Attributes.FileSize,
-			Mtime:    time.Unix(entry.Attributes.Mtime, 0),
-			Crtime:   time.Unix(entry.Attributes.Crtime, 0),
-			Mime:     entry.Attributes.Mime,
-		},
-		Chunks: entry.Chunks,
-	}
-	sourceETag := filer.ETagEntry(filerEntry)
+	sourceETag := strings.Trim(copyEntryETag(entry), `"`)
 
 	// Check X-Amz-Copy-Source-If-Match
 	if ifMatch := r.Header.Get(s3_constants.AmzCopySourceIfMatch); ifMatch != "" {
@@ -2818,3 +2792,31 @@ func (s3a *S3ApiServer) encryptInlineContent(content []byte, dstBucket, dstObjec
 	// No encryption needed
 	return content, nil, nil
 }
+
+func copyEntryETag(entry *filer_pb.Entry) string {
+	if entry == nil {
+		return ""
+	}
+	if entry.Extended != nil {
+		if etag, ok := entry.Extended[s3_constants.ExtETagKey]; ok && len(etag) > 0 {
+			return string(etag)
+		}
+	}
+	attr := filer.Attr{}
+	if entry.Attributes != nil {
+		attr = filer.Attr{
+			FileSize: entry.Attributes.FileSize,
+			Mtime:    time.Unix(entry.Attributes.Mtime, 0),
+			Crtime:   time.Unix(entry.Attributes.Crtime, 0),
+			Mime:     entry.Attributes.Mime,
+			Md5:      entry.Attributes.Md5,
+		}
+	}
+	return filer.ETagEntry(&filer.Entry{
+		Attr:    attr,
+		Chunks:  entry.Chunks,
+		Content: entry.Content,
+		Remote:  entry.RemoteEntry,
+	})
+}
+

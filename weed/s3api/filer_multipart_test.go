@@ -3,7 +3,6 @@ package s3api
 import (
 	"crypto/tls"
 	"encoding/hex"
-	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
