@@ -3,9 +3,9 @@ package s3api
 import (
 	"bytes"
 	"context"
-	"errors"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -597,6 +597,26 @@ func (s3a *S3ApiServer) CopyObjectPartHandler(w http.ResponseWriter, r *http.Req
 		dstEntry.Chunks = dstChunks
 	}
 
+	// Calculate ETag for the part from the chunks we just wrote, and persist it
+	// so later reads (e.g. CompleteMultipartUpload's part validation) see a
+	// correct, non-empty ETag instead of recomputing from a mutated entry.
+	etag := copyEntryETag(dstEntry)
+	if etag != "" && !strings.HasPrefix(etag, "\"") {
+		etag = "\"" + etag + "\""
+	}
+	if dstEntry.Extended == nil {
+		dstEntry.Extended = make(map[string][]byte)
+	}
+	dstEntry.Extended[s3_constants.ExtETagKey] = []byte(etag)
+	// When the part is a single chunk, also store its MD5 on Attributes so
+	// completeMultipartUpload's Attributes.Md5 fast path (matching regular,
+	// non-copy UploadPart behavior) picks it up directly.
+	if len(dstEntry.Chunks) == 1 {
+		if md5Bytes := util.Base64Md5ToBytes(dstEntry.Chunks[0].ETag); len(md5Bytes) == 16 {
+			dstEntry.Attributes.Md5 = md5Bytes
+		}
+	}
+
 	// Save the part entry to the multipart uploads folder
 	uploadDir := s3a.genUploadsFolder(dstBucket) + "/" + uploadID
 	partName := fmt.Sprintf("%04d_%s.part", partID, "copy")
@@ -617,11 +637,6 @@ func (s3a *S3ApiServer) CopyObjectPartHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Calculate ETag for the part
-	etag := copyEntryETag(dstEntry)
-	if etag != "" && !strings.HasPrefix(etag, "\"") {
-		etag = "\"" + etag + "\""
-	}
 	setEtag(w, etag)
 
 	response := CopyPartResult{
@@ -869,6 +884,13 @@ func (s3a *S3ApiServer) copySingleChunk(chunk *filer_pb.FileChunk, dstPath strin
 		return nil, fmt.Errorf("upload chunk data: %w", err)
 	}
 
+	// Recompute the destination chunk's ETag from the bytes actually written,
+	// rather than trusting the source chunk's stored ETag (createDestinationChunk's
+	// default). This keeps ETagChunks/copyEntryETag correct even if the source
+	// chunk's ETag was empty or stale, and matches what the volume server would
+	// itself report for these bytes.
+	dstChunk.ETag = util.Base64Md5(chunkData)
+
 	return dstChunk, nil
 }
 
@@ -903,6 +925,13 @@ func (s3a *S3ApiServer) copySingleChunkForRange(originalChunk, rangeChunk *filer
 	if err := s3a.uploadChunkData(chunkData, assignResult, originalChunk.IsCompressed); err != nil {
 		return nil, fmt.Errorf("upload chunk range data: %w", err)
 	}
+
+	// createDestinationChunk copies the *original* (whole-chunk) ETag from
+	// rangeChunk, which is only correct when the range happens to cover the
+	// entire source chunk. For partial ranges the copied bytes differ from
+	// the source chunk's bytes, so the ETag must be recomputed from the
+	// data that was actually downloaded and uploaded for this range.
+	dstChunk.ETag = util.Base64Md5(chunkData)
 
 	return dstChunk, nil
 }
@@ -2819,4 +2848,3 @@ func copyEntryETag(entry *filer_pb.Entry) string {
 		Remote:  entry.RemoteEntry,
 	})
 }
-

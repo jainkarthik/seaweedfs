@@ -2,6 +2,7 @@ package s3api
 
 import (
 	"encoding/hex"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
 	"github.com/seaweedfs/seaweedfs/weed/s3api/s3_constants"
 	"github.com/seaweedfs/seaweedfs/weed/s3api/s3err"
+	"github.com/seaweedfs/seaweedfs/weed/util"
 )
 
 func mustDecodeHexETagForTest(t *testing.T, etag string) []byte {
@@ -70,6 +72,54 @@ func TestValidateConditionalCopyHeadersUsesStoredExtendedETag(t *testing.T) {
 	noneMatchReq.Header.Set(s3_constants.AmzCopySourceIfNoneMatch, storedETag)
 	if got := s3a.validateConditionalCopyHeaders(noneMatchReq, entry); got != s3err.ErrPreconditionFailed {
 		t.Fatalf("validateConditionalCopyHeaders(If-None-Match stored ETag) = %v, want %v", got, s3err.ErrPreconditionFailed)
+	}
+}
+
+func TestCopyEntryETagFromChunksMatchesRecomputedMd5(t *testing.T) {
+	// Regression test for UploadPartCopy returning an empty <ETag></ETag>: when a
+	// copied chunk's ETag is derived from the actual copied bytes (as
+	// copySingleChunk/copySingleChunkForRange now do via util.Base64Md5), a
+	// single-chunk part must produce a valid, non-empty hex MD5 ETag instead of
+	// falling back to "" from an empty/stale chunk ETag.
+	data := []byte("partcopy payload bytes")
+	entry := &filer_pb.Entry{
+		Name: "part",
+		Attributes: &filer_pb.FuseAttributes{
+			FileSize: uint64(len(data)),
+		},
+		Chunks: []*filer_pb.FileChunk{
+			{
+				Offset: 0,
+				Size:   uint64(len(data)),
+				ETag:   util.Base64Md5(data),
+			},
+		},
+	}
+
+	etag := copyEntryETag(entry)
+	if etag == "" {
+		t.Fatal("copyEntryETag() = \"\", want a non-empty hex MD5")
+	}
+	want := fmt.Sprintf("%x", util.Md5(data))
+	if etag != want {
+		t.Fatalf("copyEntryETag() = %q, want %q", etag, want)
+	}
+}
+
+func TestCopyEntryETagEmptyChunkETagYieldsEmptyResult(t *testing.T) {
+	// Documents the failure mode being fixed: an unset chunk ETag decodes to zero
+	// bytes and produces an empty ETag string, which is what UploadPartCopy used
+	// to return before chunk ETags were recomputed from the copied bytes.
+	entry := &filer_pb.Entry{
+		Name:       "part",
+		Attributes: &filer_pb.FuseAttributes{FileSize: 5},
+		Chunks: []*filer_pb.FileChunk{
+			{Offset: 0, Size: 5, ETag: ""},
+		},
+	}
+
+	if etag := copyEntryETag(entry); etag != "" {
+		t.Fatalf("copyEntryETag() = %q, want empty string for unset chunk ETag", etag)
 	}
 }
 
