@@ -1,7 +1,11 @@
 package s3api
 
 import (
+	"bytes"
+	"context"
+	"encoding/base64"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,6 +18,7 @@ import (
 	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
 	"github.com/seaweedfs/seaweedfs/weed/s3api/s3_constants"
 	"github.com/seaweedfs/seaweedfs/weed/s3api/s3err"
+	"github.com/seaweedfs/seaweedfs/weed/util"
 )
 
 type H map[string]string
@@ -835,4 +840,294 @@ func TestWriteCopyObjectResponse(t *testing.T) {
 		t.Errorf("expected body to contain ChecksumType, got %s", body)
 	}
 }
+
+func TestCopyPartDetectionHelpers(t *testing.T) {
+	// 1. sourceEntryIsEncrypted
+	t.Run("sourceEntryIsEncrypted", func(t *testing.T) {
+		if sourceEntryIsEncrypted(nil) {
+			t.Errorf("expected nil entry to not be encrypted")
+		}
+		plainEntry := &filer_pb.Entry{Extended: map[string][]byte{}}
+		if sourceEntryIsEncrypted(plainEntry) {
+			t.Errorf("expected plain entry to not be encrypted")
+		}
+
+		s3Entry := &filer_pb.Entry{Extended: map[string][]byte{
+			s3_constants.AmzServerSideEncryption: []byte(s3_constants.SSEAlgorithmAES256),
+			s3_constants.SeaweedFSSSES3Key:       []byte("s3-key-data"),
+		}}
+		if !sourceEntryIsEncrypted(s3Entry) {
+			t.Errorf("expected SSE-S3 entry to be detected as encrypted")
+		}
+
+		kmsEntry := &filer_pb.Entry{Extended: map[string][]byte{
+			s3_constants.AmzServerSideEncryption: []byte(s3_constants.SSEAlgorithmKMS),
+			s3_constants.SeaweedFSSSEKMSKey:      []byte("kms-key-data"),
+		}}
+		if !sourceEntryIsEncrypted(kmsEntry) {
+			t.Errorf("expected SSE-KMS entry to be detected as encrypted")
+		}
+
+		ssecEntry := &filer_pb.Entry{Extended: map[string][]byte{
+			s3_constants.AmzServerSideEncryptionCustomerAlgorithm: []byte("AES256"),
+		}}
+		if !sourceEntryIsEncrypted(ssecEntry) {
+			t.Errorf("expected SSE-C entry to be detected as encrypted")
+		}
+	})
+
+	// 2. uploadEntryHasSSE
+	t.Run("uploadEntryHasSSE", func(t *testing.T) {
+		if uploadEntryHasSSE(nil) {
+			t.Errorf("expected nil upload entry to not have SSE")
+		}
+		plainUpload := &filer_pb.Entry{Extended: map[string][]byte{}}
+		if uploadEntryHasSSE(plainUpload) {
+			t.Errorf("expected plain upload to not have SSE")
+		}
+
+		sses3Upload := &filer_pb.Entry{Extended: map[string][]byte{
+			s3_constants.SeaweedFSSSES3Encryption: []byte(s3_constants.SSEAlgorithmAES256),
+		}}
+		if !uploadEntryHasSSE(sses3Upload) {
+			t.Errorf("expected SSE-S3 upload to have SSE")
+		}
+
+		kmsUpload := &filer_pb.Entry{Extended: map[string][]byte{
+			s3_constants.SeaweedFSSSEKMSKeyID: []byte("test-key-id"),
+		}}
+		if !uploadEntryHasSSE(kmsUpload) {
+			t.Errorf("expected SSE-KMS upload to have SSE")
+		}
+
+		ssecUpload := &filer_pb.Entry{Extended: map[string][]byte{
+			s3_constants.SeaweedFSSSEIV: []byte("iv"),
+		}}
+		if !uploadEntryHasSSE(ssecUpload) {
+			t.Errorf("expected SSE-C upload to have SSE")
+		}
+
+		amzSSEUpload := &filer_pb.Entry{Extended: map[string][]byte{
+			s3_constants.AmzServerSideEncryption: []byte("AES256"),
+		}}
+		if !uploadEntryHasSSE(amzSSEUpload) {
+			t.Errorf("expected AmzServerSideEncryption upload to have SSE")
+		}
+	})
+
+	// 3. destinationHasSSE
+	t.Run("destinationHasSSE", func(t *testing.T) {
+		req := httptest.NewRequest("PUT", "/dst/part", nil)
+		if destinationHasSSE(req, nil) {
+			t.Errorf("expected destination without headers or uploadEntry to not have SSE")
+		}
+
+		reqWithSSEC := httptest.NewRequest("PUT", "/dst/part", nil)
+		reqWithSSEC.Header.Set(s3_constants.AmzServerSideEncryptionCustomerAlgorithm, "AES256")
+		if !destinationHasSSE(reqWithSSEC, nil) {
+			t.Errorf("expected destination with SSE-C header to have SSE")
+		}
+
+		sses3Upload := &filer_pb.Entry{Extended: map[string][]byte{
+			s3_constants.SeaweedFSSSES3Encryption: []byte(s3_constants.SSEAlgorithmAES256),
+		}}
+		if !destinationHasSSE(req, sses3Upload) {
+			t.Errorf("expected destination with SSE-S3 upload entry to have SSE")
+		}
+	})
+}
+
+func TestApplyDestSSEHeadersToCopyPartRequest(t *testing.T) {
+	s3a := &S3ApiServer{}
+
+	t.Run("SSE-KMS upload entry sets cloned request headers", func(t *testing.T) {
+		baseIV := make([]byte, s3_constants.AESBlockSize)
+		for i := range baseIV {
+			baseIV[i] = byte(i + 1)
+		}
+		baseIVEncoded := base64.StdEncoding.EncodeToString(baseIV)
+
+		uploadEntry := &filer_pb.Entry{
+			Extended: map[string][]byte{
+				s3_constants.SeaweedFSSSEKMSKeyID:            []byte("arn:aws:kms:us-east-1:123456789012:key/test-key"),
+				s3_constants.SeaweedFSSSEKMSBucketKeyEnabled: []byte("true"),
+				s3_constants.SeaweedFSSSEKMSBaseIV:           []byte(baseIVEncoded),
+			},
+		}
+
+		clonedReq := httptest.NewRequest("PUT", "/bucket/part", nil)
+		err := s3a.applyDestSSEHeadersToCopyPartRequest(clonedReq, uploadEntry, "upload-123", "bucket", "object")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if clonedReq.Header.Get(s3_constants.AmzServerSideEncryption) != "aws:kms" {
+			t.Errorf("expected aws:kms encryption header, got %q", clonedReq.Header.Get(s3_constants.AmzServerSideEncryption))
+		}
+		if clonedReq.Header.Get(s3_constants.AmzServerSideEncryptionAwsKmsKeyId) != "arn:aws:kms:us-east-1:123456789012:key/test-key" {
+			t.Errorf("expected KMS key id header, got %q", clonedReq.Header.Get(s3_constants.AmzServerSideEncryptionAwsKmsKeyId))
+		}
+		if clonedReq.Header.Get(s3_constants.AmzServerSideEncryptionBucketKeyEnabled) != "true" {
+			t.Errorf("expected bucket key enabled header")
+		}
+		if clonedReq.Header.Get(s3_constants.SeaweedFSSSEKMSBaseIVHeader) != baseIVEncoded {
+			t.Errorf("expected base IV header, got %q", clonedReq.Header.Get(s3_constants.SeaweedFSSSEKMSBaseIVHeader))
+		}
+	})
+
+	t.Run("SSE-S3 upload entry sets cloned request headers", func(t *testing.T) {
+		baseIV := make([]byte, s3_constants.AESBlockSize)
+		for i := range baseIV {
+			baseIV[i] = byte(i + 5)
+		}
+		baseIVEncoded := base64.StdEncoding.EncodeToString(baseIV)
+		keyData := base64.StdEncoding.EncodeToString([]byte("dummy-key-data-32bytes-padding!"))
+
+		uploadEntry := &filer_pb.Entry{
+			Extended: map[string][]byte{
+				s3_constants.SeaweedFSSSES3Encryption: []byte(s3_constants.SSEAlgorithmAES256),
+				s3_constants.SeaweedFSSSES3BaseIV:     []byte(baseIVEncoded),
+				s3_constants.SeaweedFSSSES3KeyData:    []byte(keyData),
+			},
+		}
+
+		clonedReq := httptest.NewRequest("PUT", "/bucket/part", nil)
+		err := s3a.applyDestSSEHeadersToCopyPartRequest(clonedReq, uploadEntry, "upload-456", "bucket", "object")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if clonedReq.Header.Get(s3_constants.AmzServerSideEncryption) != s3_constants.SSEAlgorithmAES256 {
+			t.Errorf("expected AES256 encryption header, got %q", clonedReq.Header.Get(s3_constants.AmzServerSideEncryption))
+		}
+		if clonedReq.Header.Get(s3_constants.SeaweedFSSSES3BaseIVHeader) != baseIVEncoded {
+			t.Errorf("expected base IV header, got %q", clonedReq.Header.Get(s3_constants.SeaweedFSSSES3BaseIVHeader))
+		}
+		if clonedReq.Header.Get(s3_constants.SeaweedFSSSES3KeyDataHeader) != keyData {
+			t.Errorf("expected key data header, got %q", clonedReq.Header.Get(s3_constants.SeaweedFSSSES3KeyDataHeader))
+		}
+	})
+}
+
+func TestOpenSourcePlaintextReaderInline(t *testing.T) {
+	s3a := &S3ApiServer{}
+
+	rawContent := []byte("Hello, World! This is plaintext test data.")
+	entry := &filer_pb.Entry{
+		Name:    "test.txt",
+		Content: rawContent,
+		Attributes: &filer_pb.FuseAttributes{
+			FileSize: uint64(len(rawContent)),
+		},
+	}
+
+	req := httptest.NewRequest("PUT", "/dst/part", nil)
+	// Read range 7-11 ("World")
+	reader, err := s3a.openSourcePlaintextReader(context.Background(), entry, 7, 11, req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	readBytes, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("failed reading from reader: %v", err)
+	}
+
+	if string(readBytes) != "World" {
+		t.Errorf("expected %q, got %q", "World", string(readBytes))
+	}
+}
+
+func TestUploadPartCopySSES3PlaintextETag(t *testing.T) {
+	// Verifies that for SSE-S3 encrypted objects, the ETag of a copied part is
+	// computed over the unencrypted plaintext, NOT the ciphertext.
+	plaintext := []byte("secret plaintext payload for sse-s3 range copy")
+	expectedMD5 := fmt.Sprintf("%x", util.Md5(plaintext))
+
+	globalSSES3KeyManager = NewSSES3KeyManager()
+	defer func() {
+		globalSSES3KeyManager = NewSSES3KeyManager()
+	}()
+
+	keyManager := GetSSES3KeyManager()
+	keyManager.superKey = make([]byte, 32)
+	for i := range keyManager.superKey {
+		keyManager.superKey[i] = byte(i + 1)
+	}
+
+	sseKey, err := keyManager.GetOrCreateKey("test-s3-key")
+	if err != nil {
+		t.Fatalf("failed to create SSE-S3 key: %v", err)
+	}
+
+	iv := make([]byte, s3_constants.AESBlockSize)
+	for i := range iv {
+		iv[i] = byte(i + 1)
+	}
+	sseKey.IV = iv
+
+	// Encrypt the plaintext to simulate what's stored in SeaweedFS
+	encReader, encIV, err := CreateSSES3EncryptedReader(bytes.NewReader(plaintext), sseKey)
+	if err != nil {
+		t.Fatalf("failed to encrypt test data: %v", err)
+	}
+	ciphertext, err := io.ReadAll(encReader)
+	if err != nil {
+		t.Fatalf("failed reading ciphertext: %v", err)
+	}
+
+	// Verify ciphertext != plaintext
+	if bytes.Equal(ciphertext, plaintext) {
+		t.Fatalf("ciphertext unexpectedly equals plaintext")
+	}
+	ciphertextMD5 := fmt.Sprintf("%x", util.Md5(ciphertext))
+
+	// Serialize SSE-S3 metadata
+	sseKey.IV = encIV
+	keyMetadata, err := SerializeSSES3Metadata(sseKey)
+	if err != nil {
+		t.Fatalf("failed to serialize SSE-S3 metadata: %v", err)
+	}
+
+	entry := &filer_pb.Entry{
+		Name:    "encrypted.txt",
+		Content: ciphertext,
+		Attributes: &filer_pb.FuseAttributes{
+			FileSize: uint64(len(ciphertext)),
+		},
+		Extended: map[string][]byte{
+			s3_constants.AmzServerSideEncryption: []byte(s3_constants.SSEAlgorithmAES256),
+			s3_constants.SeaweedFSSSES3Key:       keyMetadata,
+		},
+	}
+
+	s3a := &S3ApiServer{}
+	req := httptest.NewRequest("PUT", "/dst/part", nil)
+
+	// Read decrypted plaintext range 0 to len-1
+	reader, err := s3a.openSourcePlaintextReader(context.Background(), entry, 0, int64(len(plaintext)-1), req)
+	if err != nil {
+		t.Fatalf("openSourcePlaintextReader error: %v", err)
+	}
+
+	decrypted, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatalf("reading decrypted data error: %v", err)
+	}
+
+	if !bytes.Equal(decrypted, plaintext) {
+		t.Fatalf("decrypted data %q != plaintext %q", string(decrypted), string(plaintext))
+	}
+
+	// Compute ETag on the streamed data
+	computedETag := fmt.Sprintf("%x", util.Md5(decrypted))
+	if computedETag != expectedMD5 {
+		t.Errorf("computed ETag %q != expected plaintext MD5 %q", computedETag, expectedMD5)
+	}
+	if computedETag == ciphertextMD5 {
+		t.Errorf("computed ETag incorrectly matches ciphertext MD5!")
+	}
+}
+
+
 

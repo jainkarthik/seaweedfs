@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -597,6 +598,18 @@ func (s3a *S3ApiServer) CopyObjectPartHandler(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// Retrieve the upload entry from the upload directory
+	uploadDir := s3a.genUploadsFolder(dstBucket) + "/" + uploadID
+	uploadEntry, err := s3a.getEntry(s3a.genUploadsFolder(dstBucket), uploadID)
+	if errors.Is(err, filer_pb.ErrNotFound) {
+		s3err.WriteErrorResponse(w, r, s3err.ErrNoSuchUpload)
+		return
+	} else if err != nil {
+		glog.Errorf("CopyObjectPartHandler: Could not retrieve upload entry for %s/%s: %v", dstBucket, uploadID, err)
+		s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
+		return
+	}
+
 	// Get detailed versioning state for source bucket
 	srcVersioningState, err := s3a.getVersioningState(srcBucket)
 	if err != nil {
@@ -672,6 +685,97 @@ func (s3a *S3ApiServer) CopyObjectPartHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	t := time.Now().UTC().Truncate(time.Millisecond)
+
+	if sourceEntryIsEncrypted(entry) || destinationHasSSE(r, uploadEntry) {
+		if rangeHeader != "" && (entry.Attributes.FileSize == 0 || uint64(startOffset) >= entry.Attributes.FileSize || uint64(endOffset) >= entry.Attributes.FileSize || endOffset < startOffset) {
+			s3err.WriteErrorResponse(w, r, s3err.ErrInvalidRange)
+			return
+		} else if entry.Attributes.FileSize == 0 || endOffset < startOffset {
+			tag, code := s3a.writeEmptyCopyPart(dstBucket, uploadID, partID)
+			if code != s3err.ErrNone {
+				s3err.WriteErrorResponse(w, r, code)
+				return
+			}
+			setEtag(w, tag)
+			if uploadEntry != nil && uploadEntry.Extended != nil {
+				if sse := string(uploadEntry.Extended[s3_constants.AmzServerSideEncryption]); sse != "" {
+					w.Header().Set(s3_constants.AmzServerSideEncryption, sse)
+				} else if enc, err := s3a.GetBucketEncryptionConfig(dstBucket); err == nil && enc != nil && enc.SseAlgorithm != "" {
+					w.Header().Set(s3_constants.AmzServerSideEncryption, enc.SseAlgorithm)
+				}
+			} else if enc, err := s3a.GetBucketEncryptionConfig(dstBucket); err == nil && enc != nil && enc.SseAlgorithm != "" {
+				w.Header().Set(s3_constants.AmzServerSideEncryption, enc.SseAlgorithm)
+			}
+			writeSuccessResponseXML(w, r, CopyPartResult{
+				ETag:         tag,
+				LastModified: t,
+			})
+			return
+		}
+
+		srcReader, err := s3a.openSourcePlaintextReader(r.Context(), entry, startOffset, endOffset, r)
+		if err != nil {
+			glog.Errorf("CopyObjectPartHandler: openSourcePlaintextReader error: %v", err)
+			s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
+			return
+		}
+
+		cloned := r.Clone(r.Context())
+		if err := s3a.applyDestSSEHeadersToCopyPartRequest(cloned, uploadEntry, uploadID, dstBucket, dstObject); err != nil {
+			glog.Errorf("CopyObjectPartHandler: applyDestSSEHeaders error: %v", err)
+			s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
+			return
+		}
+
+		if uploadEntry != nil && uploadEntry.Extended != nil {
+			if headerName := string(uploadEntry.Extended[s3_constants.ExtChecksumAlgorithm]); headerName != "" {
+				if algo, reqHeaderName, code := detectRequestedChecksumAlgorithm(cloned); code == s3err.ErrNone {
+					if algo == ChecksumAlgorithmNone {
+						if name := checksumAlgorithmNameFromHeaderName(headerName); name != "" {
+							cloned.Header.Set(s3_constants.AmzChecksumAlgorithm, name)
+						}
+					} else if reqHeaderName != headerName {
+						s3err.WriteErrorResponse(w, r, s3err.ErrInvalidRequest)
+						return
+					}
+				}
+			}
+		}
+
+		partName := fmt.Sprintf("%04d_%s.part", partID, "copy")
+		if exists, _ := s3a.exists(uploadDir, partName, false); exists {
+			_ = s3a.rm(uploadDir, partName, false, false)
+		}
+
+		filePath := uploadDir + "/" + partName
+		tag, code, putSSE := s3a.putToFiler(cloned, filePath, srcReader, dstBucket, partID)
+		if code != s3err.ErrNone {
+			s3err.WriteErrorResponse(w, r, code)
+			return
+		}
+
+		if !strings.HasPrefix(tag, "\"") {
+			tag = "\"" + tag + "\""
+		}
+		setEtag(w, tag)
+		s3a.setSSEResponseHeaders(w, r, putSSE)
+
+		response := CopyPartResult{
+			ETag:         tag,
+			LastModified: t,
+		}
+		if putSSE.ChecksumHeaderName != "" && putSSE.ChecksumValue != "" {
+			response.SetChecksum(putSSE.ChecksumHeaderName, putSSE.ChecksumValue)
+		}
+		if putSSE.SSEType == "" {
+			if enc, err := s3a.GetBucketEncryptionConfig(dstBucket); err == nil && enc != nil && enc.SseAlgorithm != "" {
+				w.Header().Set(s3_constants.AmzServerSideEncryption, enc.SseAlgorithm)
+			}
+		}
+		writeSuccessResponseXML(w, r, response)
+		return
+	}
+
 	dstEntry := &filer_pb.Entry{
 		Attributes: &filer_pb.FuseAttributes{
 			FileSize: partSize,
@@ -722,7 +826,6 @@ func (s3a *S3ApiServer) CopyObjectPartHandler(w http.ResponseWriter, r *http.Req
 	}
 
 	// Save the part entry to the multipart uploads folder
-	uploadDir := s3a.genUploadsFolder(dstBucket) + "/" + uploadID
 	partName := fmt.Sprintf("%04d_%s.part", partID, "copy")
 
 	// Check if part exists and remove it first (allow re-copying same part)
@@ -2967,3 +3070,185 @@ func copyEntryETag(entry *filer_pb.Entry) string {
 		Remote:  entry.RemoteEntry,
 	})
 }
+
+func sourceEntryIsEncrypted(entry *filer_pb.Entry) bool {
+	if entry == nil || entry.Extended == nil {
+		return false
+	}
+	return IsSSECEncrypted(entry.Extended) || IsSSEKMSEncrypted(entry.Extended) || IsSSES3EncryptedInternal(entry.Extended)
+}
+
+func uploadEntryHasSSE(uploadEntry *filer_pb.Entry) bool {
+	if uploadEntry == nil || uploadEntry.Extended == nil {
+		return false
+	}
+	if _, ok := uploadEntry.Extended[s3_constants.SeaweedFSSSES3Encryption]; ok {
+		return true
+	}
+	if _, ok := uploadEntry.Extended[s3_constants.SeaweedFSSSES3KeyData]; ok {
+		return true
+	}
+	if _, ok := uploadEntry.Extended[s3_constants.SeaweedFSSSEKMSKeyID]; ok {
+		return true
+	}
+	if _, ok := uploadEntry.Extended[s3_constants.SeaweedFSSSEIV]; ok {
+		return true
+	}
+	if sse, ok := uploadEntry.Extended[s3_constants.AmzServerSideEncryption]; ok && len(sse) > 0 {
+		return true
+	}
+	return false
+}
+
+func destinationHasSSE(r *http.Request, uploadEntry *filer_pb.Entry) bool {
+	if r != nil && r.Header.Get(s3_constants.AmzServerSideEncryptionCustomerAlgorithm) != "" {
+		return true
+	}
+	return uploadEntryHasSSE(uploadEntry)
+}
+
+func (s3a *S3ApiServer) openSourcePlaintextReader(ctx context.Context, entry *filer_pb.Entry, startOffset, endOffset int64, r *http.Request) (io.Reader, error) {
+	if endOffset < startOffset {
+		return bytes.NewReader(nil), nil
+	}
+	size := endOffset - startOffset + 1
+
+	if len(entry.Content) > 0 && len(entry.GetChunks()) == 0 {
+		content := entry.Content
+		if sourceEntryIsEncrypted(entry) {
+			srcSSEC := IsSSECEncrypted(entry.Extended)
+			srcSSEKMS := IsSSEKMSEncrypted(entry.Extended)
+			srcSSES3 := IsSSES3EncryptedInternal(entry.Extended)
+			decrypted, err := s3a.decryptInlineContent(entry, srcSSEC, srcSSEKMS, srcSSES3, r)
+			if err != nil {
+				return nil, fmt.Errorf("decrypt inline content: %w", err)
+			}
+			content = decrypted
+		}
+		if startOffset >= int64(len(content)) {
+			return bytes.NewReader(nil), nil
+		}
+		end := startOffset + size
+		if end > int64(len(content)) {
+			end = int64(len(content))
+		}
+		return bytes.NewReader(content[startOffset:end]), nil
+	}
+
+	var sseType string
+	var decryptionKey interface{}
+
+	if entry.Extended != nil {
+		if IsSSECEncrypted(entry.Extended) {
+			sseType = s3_constants.SSETypeC
+			customerKey, err := ParseSSECCopySourceHeaders(r)
+			if err != nil {
+				customerKey, err = ParseSSECHeaders(r)
+			}
+			if err != nil || customerKey == nil {
+				return nil, fmt.Errorf("failed to parse SSE-C key for copy source: %v", err)
+			}
+			decryptionKey = customerKey
+		} else if IsSSEKMSEncrypted(entry.Extended) {
+			sseType = s3_constants.SSETypeKMS
+			kmsMetadataBytes := entry.Extended[s3_constants.SeaweedFSSSEKMSKey]
+			sseKMSKey, err := DeserializeSSEKMSMetadata(kmsMetadataBytes)
+			if err != nil {
+				return nil, fmt.Errorf("failed to deserialize SSE-KMS key: %w", err)
+			}
+			decryptionKey = sseKMSKey
+		} else if IsSSES3EncryptedInternal(entry.Extended) {
+			sseType = s3_constants.SSETypeS3
+			keyData := entry.Extended[s3_constants.SeaweedFSSSES3Key]
+			keyManager := GetSSES3KeyManager()
+			sseS3Key, err := DeserializeSSES3Metadata(keyData, keyManager)
+			if err != nil {
+				return nil, fmt.Errorf("failed to deserialize SSE-S3 key: %w", err)
+			}
+			decryptionKey = sseS3Key
+		}
+	}
+
+	pr, pw := io.Pipe()
+	go func() {
+		_, err := s3a.streamDecryptedRangeFromChunks(ctx, pw, entry, startOffset, size, sseType, decryptionKey)
+		if err != nil {
+			pw.CloseWithError(err)
+		} else {
+			pw.Close()
+		}
+	}()
+	return pr, nil
+}
+
+func (s3a *S3ApiServer) applyDestSSEHeadersToCopyPartRequest(clonedReq *http.Request, uploadEntry *filer_pb.Entry, uploadID, bucket, object string) error {
+	if uploadEntry == nil || uploadEntry.Extended == nil {
+		return nil
+	}
+
+	// 1. SSE-KMS
+	if keyIDBytes, exists := uploadEntry.Extended[s3_constants.SeaweedFSSSEKMSKeyID]; exists {
+		keyID := string(keyIDBytes)
+		bucketKeyEnabled := string(uploadEntry.Extended[s3_constants.SeaweedFSSSEKMSBucketKeyEnabled]) == "true"
+
+		var encryptionContext map[string]string
+		if contextBytes, exists := uploadEntry.Extended[s3_constants.SeaweedFSSSEKMSEncryptionContext]; exists {
+			if err := json.Unmarshal(contextBytes, &encryptionContext); err != nil {
+				encryptionContext = BuildEncryptionContext(bucket, object, bucketKeyEnabled)
+			}
+		} else {
+			encryptionContext = BuildEncryptionContext(bucket, object, bucketKeyEnabled)
+		}
+
+		var baseIV []byte
+		if baseIVBytes, exists := uploadEntry.Extended[s3_constants.SeaweedFSSSEKMSBaseIV]; exists {
+			decodedIV, decodeErr := base64.StdEncoding.DecodeString(string(baseIVBytes))
+			if decodeErr == nil && len(decodedIV) == s3_constants.AESBlockSize {
+				baseIV = decodedIV
+			}
+		}
+		if len(baseIV) == 0 {
+			return fmt.Errorf("no valid base IV found for SSE-KMS multipart upload %s", uploadID)
+		}
+
+		clonedReq.Header.Set(s3_constants.AmzServerSideEncryption, "aws:kms")
+		clonedReq.Header.Set(s3_constants.AmzServerSideEncryptionAwsKmsKeyId, keyID)
+		if bucketKeyEnabled {
+			clonedReq.Header.Set(s3_constants.AmzServerSideEncryptionBucketKeyEnabled, "true")
+		}
+		if len(encryptionContext) > 0 {
+			if contextJSON, err := json.Marshal(encryptionContext); err == nil {
+				clonedReq.Header.Set(s3_constants.AmzServerSideEncryptionContext, base64.StdEncoding.EncodeToString(contextJSON))
+			}
+		}
+		clonedReq.Header.Set(s3_constants.SeaweedFSSSEKMSBaseIVHeader, base64.StdEncoding.EncodeToString(baseIV))
+		return nil
+	}
+
+	// 2. SSE-S3
+	if encryptionTypeBytes, exists := uploadEntry.Extended[s3_constants.SeaweedFSSSES3Encryption]; exists && string(encryptionTypeBytes) == s3_constants.SSEAlgorithmAES256 {
+		return s3a.handleSSES3MultipartHeaders(clonedReq, uploadEntry, uploadID)
+	}
+
+	return nil
+}
+
+func (s3a *S3ApiServer) writeEmptyCopyPart(dstBucket, uploadID string, partID int) (string, s3err.ErrorCode) {
+	uploadDir := s3a.genUploadsFolder(dstBucket) + "/" + uploadID
+	partName := fmt.Sprintf("%04d_%s.part", partID, "copy")
+	emptyETag := "\"d41d8cd98f00b204e9800998ecf8427e\""
+	err := s3a.mkFile(uploadDir, partName, nil, func(entry *filer_pb.Entry) {
+		entry.Attributes = &filer_pb.FuseAttributes{
+			FileSize: 0,
+			Mtime:    time.Now().Unix(),
+		}
+		entry.Extended = map[string][]byte{
+			s3_constants.ExtETagKey: []byte(emptyETag),
+		}
+	})
+	if err != nil {
+		return "", s3err.ErrInternalError
+	}
+	return emptyETag, s3err.ErrNone
+}
+
