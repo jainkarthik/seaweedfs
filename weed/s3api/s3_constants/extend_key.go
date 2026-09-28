@@ -20,6 +20,11 @@ const (
 	ExtLatestVersionIsDeleteMarker = "Seaweed-X-Amz-Latest-Version-Is-Delete-Marker"
 	ExtMultipartObjectKey          = "key"
 
+	// S3 checksum storage keys (use x-seaweedfs- prefix to avoid leaking in generic header loop)
+	ExtChecksumAlgorithm = "x-seaweedfs-checksum-algorithm"
+	ExtChecksumValue     = "x-seaweedfs-checksum-value"
+	ExtChecksumType      = "x-seaweedfs-checksum-type"
+
 	// Bucket Policy
 	ExtBucketPolicyKey = "Seaweed-X-Amz-Bucket-Policy"
 

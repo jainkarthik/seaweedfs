@@ -256,11 +256,8 @@ func newStreamErrorWithResponse(err error) *StreamError {
 }
 
 func mimeDetect(r *http.Request, dataReader io.Reader) io.ReadCloser {
-	mimeBuffer := make([]byte, 512)
-	size, _ := dataReader.Read(mimeBuffer)
-	if size > 0 {
-		r.Header.Set("Content-Type", http.DetectContentType(mimeBuffer[:size]))
-		return io.NopCloser(io.MultiReader(bytes.NewReader(mimeBuffer[:size]), dataReader))
+	if r.Header.Get("Content-Type") == "" {
+		r.Header.Set("Content-Type", "binary/octet-stream")
 	}
 	return io.NopCloser(dataReader)
 }
@@ -1915,7 +1912,7 @@ func (s3a *S3ApiServer) setResponseHeaders(w http.ResponseWriter, r *http.Reques
 	if mimeType != "" {
 		w.Header().Set("Content-Type", mimeType)
 	} else {
-		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set("Content-Type", "binary/octet-stream")
 	}
 
 	// Set custom headers from entry.Extended (user metadata)
@@ -1951,6 +1948,34 @@ func (s3a *S3ApiServer) setResponseHeaders(w http.ResponseWriter, r *http.Reques
 		}
 		if tagCount > 0 {
 			w.Header().Set(s3_constants.AmzTagCount, strconv.Itoa(tagCount))
+		}
+	}
+
+	// Set checksum header if stored in metadata, but only when:
+	// 1. The request contains "x-amz-checksum-mode: ENABLED" (per AWS S3 spec, case-insensitive, header or query)
+	// 2. The request is NOT a ranged GET (Range header absent)
+	//    The stored checksum covers the full object; returning it for partial
+	//    responses causes SDK checksum validation failures.
+	checksumMode := ""
+	if r != nil {
+		checksumMode = r.Header.Get(s3_constants.AmzChecksumMode)
+		if checksumMode == "" && r.URL != nil {
+			checksumMode = r.URL.Query().Get("x-amz-checksum-mode")
+			if checksumMode == "" {
+				checksumMode = r.URL.Query().Get("X-Amz-Checksum-Mode")
+			}
+		}
+	}
+	if strings.EqualFold(checksumMode, "ENABLED") && (r == nil || r.Header.Get("Range") == "") {
+		if entry.Extended != nil {
+			if algoName, ok := entry.Extended[s3_constants.ExtChecksumAlgorithm]; ok {
+				if checksumVal, ok := entry.Extended[s3_constants.ExtChecksumValue]; ok {
+					w.Header().Set(string(algoName), string(checksumVal))
+					if checksumType, ok := entry.Extended[s3_constants.ExtChecksumType]; ok && len(checksumType) > 0 {
+						w.Header().Set(s3_constants.AmzChecksumType, string(checksumType))
+					}
+				}
+			}
 		}
 	}
 

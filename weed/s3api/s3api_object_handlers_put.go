@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"net/http"
 	"net/url"
@@ -66,9 +67,12 @@ type BucketDefaultEncryptionResult struct {
 
 // SSEResponseMetadata holds encryption metadata needed for HTTP response headers
 type SSEResponseMetadata struct {
-	SSEType          string
-	KMSKeyID         string
-	BucketKeyEnabled bool
+	SSEType            string
+	KMSKeyID           string
+	BucketKeyEnabled   bool
+	ChecksumHeaderName string
+	ChecksumValue      string
+	ChecksumType       string
 }
 
 func (s3a *S3ApiServer) PutObjectHandler(w http.ResponseWriter, r *http.Request) {
@@ -286,6 +290,19 @@ func (s3a *S3ApiServer) putToFiler(r *http.Request, filePath string, dataReader 
 	// For SSE, encrypt with offset=0 for all parts
 	// Each part is encrypted independently, then decrypted using metadata during GET
 	partOffset := int64(0)
+
+	// Detect and set up additional checksum computation (S3 checksum algorithm support)
+	checksumAlgo, checksumHeaderName, checksumErrCode := detectRequestedChecksumAlgorithm(r)
+	if checksumErrCode != s3err.ErrNone {
+		return "", checksumErrCode, SSEResponseMetadata{}
+	}
+	var checksumHash hash.Hash
+	if checksumAlgo != ChecksumAlgorithmNone {
+		checksumHash = getCheckSumWriter(checksumAlgo)
+		if checksumHash != nil {
+			dataReader = io.TeeReader(dataReader, checksumHash)
+		}
+	}
 
 	// Handle all SSE encryption types in a unified manner
 	sseResult, sseErrorCode := s3a.handleAllSSEEncryption(r, dataReader, partOffset)
@@ -506,7 +523,7 @@ func (s3a *S3ApiServer) putToFiler(r *http.Request, filePath string, dataReader 
 	now := time.Now()
 	mimeType := r.Header.Get("Content-Type")
 	if mimeType == "" {
-		mimeType = "application/octet-stream"
+		mimeType = "binary/octet-stream"
 	}
 
 	// Create entry
@@ -633,6 +650,32 @@ func (s3a *S3ApiServer) putToFiler(r *http.Request, filePath string, dataReader 
 		glog.V(3).Infof("putToFiler: storing SSE-S3 metadata - keyID=%s, raw len=%d", sseS3Key.KeyID, len(sseS3Metadata))
 	}
 
+	// Store additional checksum if one was computed
+	checksumBase64 := ""
+	checksumType := ""
+	if checksumHash != nil && checksumHeaderName != "" {
+		checksumBase64 = base64.StdEncoding.EncodeToString(checksumHash.Sum(nil))
+		expectedChecksum := r.Header.Get(checksumHeaderName)
+		if expectedChecksum == "" && r.URL != nil {
+			expectedChecksum = r.URL.Query().Get(checksumHeaderName)
+		}
+		if expectedChecksum != "" && expectedChecksum != checksumBase64 {
+			glog.Warningf("putToFiler: checksum mismatch for %s: expected %s, got %s", checksumHeaderName, expectedChecksum, checksumBase64)
+			if len(chunkResult.FileChunks) > 0 {
+				s3a.deleteOrphanedChunks(chunkResult.FileChunks)
+			}
+			return "", s3err.ErrBadDigest, SSEResponseMetadata{}
+		}
+		entry.Extended[s3_constants.ExtChecksumAlgorithm] = []byte(checksumHeaderName)
+		entry.Extended[s3_constants.ExtChecksumValue] = []byte(checksumBase64)
+		isMultipart := r.URL != nil && r.URL.Query().Get("uploadId") != ""
+		if !isMultipart {
+			checksumType = s3_constants.ChecksumTypeFullObject
+			entry.Extended[s3_constants.ExtChecksumType] = []byte(s3_constants.ChecksumTypeFullObject)
+		}
+		glog.V(3).Infof("putToFiler: stored checksum %s=%s for %s", checksumHeaderName, checksumBase64, filePath)
+	}
+
 	// Step 4: Save metadata to filer via gRPC
 	// Use context.Background() to ensure metadata save completes even if HTTP request is cancelled
 	// This matches the chunk upload behavior and prevents orphaned chunks
@@ -672,7 +715,10 @@ func (s3a *S3ApiServer) putToFiler(r *http.Request, filePath string, dataReader 
 
 	// Build SSE response metadata with encryption details
 	responseMetadata := SSEResponseMetadata{
-		SSEType: sseType,
+		SSEType:            sseType,
+		ChecksumHeaderName: checksumHeaderName,
+		ChecksumValue:      checksumBase64,
+		ChecksumType:       checksumType,
 	}
 
 	// For SSE-KMS, include key ID and bucket-key-enabled flag from stored metadata
@@ -731,6 +777,167 @@ func (s3a *S3ApiServer) setSSEResponseHeaders(w http.ResponseWriter, r *http.Req
 			w.Header().Set(s3_constants.AmzServerSideEncryptionBucketKeyEnabled, "true")
 		}
 	}
+
+	// Set checksum response header if a checksum was computed
+	if sseMetadata.ChecksumHeaderName != "" && sseMetadata.ChecksumValue != "" {
+		w.Header().Set(sseMetadata.ChecksumHeaderName, sseMetadata.ChecksumValue)
+		if sseMetadata.ChecksumType != "" {
+			w.Header().Set(s3_constants.AmzChecksumType, sseMetadata.ChecksumType)
+		}
+	}
+}
+
+// ChecksumResult carries the flexible-checksum members S3 returns inside an XML
+// response body, keyed by the canonical x-amz-checksum-* header name.
+type ChecksumResult struct {
+	ChecksumCRC32     string `xml:"ChecksumCRC32,omitempty"`
+	ChecksumCRC32C    string `xml:"ChecksumCRC32C,omitempty"`
+	ChecksumCRC64NVME string `xml:"ChecksumCRC64NVME,omitempty"`
+	ChecksumSHA1      string `xml:"ChecksumSHA1,omitempty"`
+	ChecksumSHA256    string `xml:"ChecksumSHA256,omitempty"`
+}
+
+func (c *ChecksumResult) SetChecksum(headerName, value string) {
+	switch strings.ToLower(headerName) {
+	case strings.ToLower(s3_constants.AmzChecksumCRC32):
+		c.ChecksumCRC32 = value
+	case strings.ToLower(s3_constants.AmzChecksumCRC32C):
+		c.ChecksumCRC32C = value
+	case strings.ToLower(s3_constants.AmzChecksumCRC64NVME):
+		c.ChecksumCRC64NVME = value
+	case strings.ToLower(s3_constants.AmzChecksumSHA1):
+		c.ChecksumSHA1 = value
+	case strings.ToLower(s3_constants.AmzChecksumSHA256):
+		c.ChecksumSHA256 = value
+	}
+}
+
+func (c *ChecksumResult) GetChecksum(headerName string) string {
+	switch strings.ToLower(headerName) {
+	case strings.ToLower(s3_constants.AmzChecksumCRC32):
+		return c.ChecksumCRC32
+	case strings.ToLower(s3_constants.AmzChecksumCRC32C):
+		return c.ChecksumCRC32C
+	case strings.ToLower(s3_constants.AmzChecksumCRC64NVME):
+		return c.ChecksumCRC64NVME
+	case strings.ToLower(s3_constants.AmzChecksumSHA1):
+		return c.ChecksumSHA1
+	case strings.ToLower(s3_constants.AmzChecksumSHA256):
+		return c.ChecksumSHA256
+	}
+	return ""
+}
+
+// checksumAlgorithmMapping maps algorithm name strings to their enum and header name.
+var checksumAlgorithmMapping = map[string]struct {
+	alg  ChecksumAlgorithm
+	name string
+}{
+	"CRC32":     {ChecksumAlgorithmCRC32, s3_constants.AmzChecksumCRC32},
+	"CRC32C":    {ChecksumAlgorithmCRC32C, s3_constants.AmzChecksumCRC32C},
+	"CRC64NVME": {ChecksumAlgorithmCRC64NVMe, s3_constants.AmzChecksumCRC64NVME},
+	"SHA1":      {ChecksumAlgorithmSHA1, s3_constants.AmzChecksumSHA1},
+	"SHA256":    {ChecksumAlgorithmSHA256, s3_constants.AmzChecksumSHA256},
+}
+
+// trailerToChecksumAlgorithm maps trailer header names to their algorithm and canonical header name.
+var trailerToChecksumAlgorithm = map[string]struct {
+	alg  ChecksumAlgorithm
+	name string
+}{
+	"x-amz-checksum-crc32":     {ChecksumAlgorithmCRC32, s3_constants.AmzChecksumCRC32},
+	"x-amz-checksum-crc32c":    {ChecksumAlgorithmCRC32C, s3_constants.AmzChecksumCRC32C},
+	"x-amz-checksum-crc64nvme": {ChecksumAlgorithmCRC64NVMe, s3_constants.AmzChecksumCRC64NVME},
+	"x-amz-checksum-sha1":      {ChecksumAlgorithmSHA1, s3_constants.AmzChecksumSHA1},
+	"x-amz-checksum-sha256":    {ChecksumAlgorithmSHA256, s3_constants.AmzChecksumSHA256},
+}
+
+// checksumHeaders is the ordered list of individual checksum headers to check.
+// Using a slice ensures deterministic selection order.
+var checksumHeaders = []struct {
+	header string
+	alg    ChecksumAlgorithm
+	name   string
+}{
+	{s3_constants.AmzChecksumCRC32, ChecksumAlgorithmCRC32, s3_constants.AmzChecksumCRC32},
+	{s3_constants.AmzChecksumCRC32C, ChecksumAlgorithmCRC32C, s3_constants.AmzChecksumCRC32C},
+	{s3_constants.AmzChecksumCRC64NVME, ChecksumAlgorithmCRC64NVMe, s3_constants.AmzChecksumCRC64NVME},
+	{s3_constants.AmzChecksumSHA1, ChecksumAlgorithmSHA1, s3_constants.AmzChecksumSHA1},
+	{s3_constants.AmzChecksumSHA256, ChecksumAlgorithmSHA256, s3_constants.AmzChecksumSHA256},
+}
+
+// detectRequestedChecksumAlgorithm detects the checksum algorithm requested by the client.
+func detectRequestedChecksumAlgorithm(r *http.Request) (ChecksumAlgorithm, string, s3err.ErrorCode) {
+	if r == nil {
+		return ChecksumAlgorithmNone, "", s3err.ErrNone
+	}
+	// Check x-amz-sdk-checksum-algorithm
+	algo := r.Header.Get(s3_constants.AmzSdkChecksumAlgorithm)
+	if algo == "" && r.URL != nil {
+		algo = r.URL.Query().Get(s3_constants.AmzSdkChecksumAlgorithm)
+		if algo == "" {
+			algo = r.URL.Query().Get("x-amz-sdk-checksum-algorithm")
+		}
+	}
+	if algo != "" {
+		if m, ok := checksumAlgorithmMapping[strings.ToUpper(algo)]; ok {
+			return m.alg, m.name, s3err.ErrNone
+		}
+		glog.Warningf("unsupported checksum algorithm in %s: %q", s3_constants.AmzSdkChecksumAlgorithm, algo)
+		return ChecksumAlgorithmNone, "", s3err.ErrInvalidRequest
+	}
+
+	// Check x-amz-checksum-algorithm header
+	algo = r.Header.Get(s3_constants.AmzChecksumAlgorithm)
+	if algo == "" && r.URL != nil {
+		algo = r.URL.Query().Get(s3_constants.AmzChecksumAlgorithm)
+		if algo == "" {
+			algo = r.URL.Query().Get("x-amz-checksum-algorithm")
+		}
+	}
+	if algo != "" {
+		if m, ok := checksumAlgorithmMapping[strings.ToUpper(algo)]; ok {
+			return m.alg, m.name, s3err.ErrNone
+		}
+		glog.Warningf("unsupported checksum algorithm in %s: %q", s3_constants.AmzChecksumAlgorithm, algo)
+		return ChecksumAlgorithmNone, "", s3err.ErrInvalidRequest
+	}
+
+	// Check x-amz-trailer header
+	if trailer := r.Header.Get(s3_constants.AmzTrailer); trailer != "" {
+		for _, part := range strings.Split(trailer, ",") {
+			part = strings.TrimSpace(strings.ToLower(part))
+			if part == "" {
+				continue
+			}
+			if m, ok := trailerToChecksumAlgorithm[part]; ok {
+				return m.alg, m.name, s3err.ErrNone
+			}
+		}
+	}
+
+	// Check individual checksum headers
+	for _, entry := range checksumHeaders {
+		if r.Header.Get(entry.header) != "" {
+			return entry.alg, entry.name, s3err.ErrNone
+		}
+		if r.URL != nil {
+			if r.URL.Query().Get(entry.header) != "" || r.URL.Query().Get(strings.ToLower(entry.header)) != "" {
+				return entry.alg, entry.name, s3err.ErrNone
+			}
+		}
+	}
+
+	return ChecksumAlgorithmNone, "", s3err.ErrNone
+}
+
+func checksumAlgorithmNameFromHeaderName(headerName string) string {
+	for name, m := range checksumAlgorithmMapping {
+		if strings.EqualFold(m.name, headerName) {
+			return name
+		}
+	}
+	return ""
 }
 
 // mapChunkedUploadErrorToS3Error classifies a failed streaming upload. A truncated

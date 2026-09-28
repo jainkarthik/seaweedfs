@@ -114,6 +114,13 @@ func (s3a *S3ApiServer) NewMultipartUploadHandler(w http.ResponseWriter, r *http
 		return
 	}
 
+	if response.ChecksumAlgorithm != "" {
+		w.Header().Set(s3_constants.AmzChecksumAlgorithm, response.ChecksumAlgorithm)
+		if response.ChecksumType != "" {
+			w.Header().Set(s3_constants.AmzChecksumType, response.ChecksumType)
+		}
+	}
+
 	writeSuccessResponseXML(w, r, response)
 
 }
@@ -346,82 +353,105 @@ func (s3a *S3ApiServer) PutObjectPartHandler(w http.ResponseWriter, r *http.Requ
 
 	glog.V(2).Infof("PutObjectPartHandler %s %s %04d", bucket, uploadID, partID)
 
+	// Retrieve the upload entry from the upload directory
+	uploadEntry, err := s3a.getEntry(s3a.genUploadsFolder(bucket), uploadID)
+	if errors.Is(err, filer_pb.ErrNotFound) {
+		s3err.WriteErrorResponse(w, r, s3err.ErrNoSuchUpload)
+		return
+	} else if err != nil {
+		glog.Errorf("Could not retrieve upload entry for %s/%s: %v", bucket, uploadID, err)
+		s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
+		return
+	}
+
 	// Check for SSE-C headers in the current request first
 	sseCustomerAlgorithm := r.Header.Get(s3_constants.AmzServerSideEncryptionCustomerAlgorithm)
 	if sseCustomerAlgorithm != "" {
 		// SSE-C part upload - headers are already present, let putToFiler handle it
 	} else {
 		// No SSE-C headers, check for SSE-KMS settings from upload directory
-		if uploadEntry, err := s3a.getEntry(s3a.genUploadsFolder(bucket), uploadID); err == nil {
-			if uploadEntry.Extended != nil {
-				// Check if this upload uses SSE-KMS
-				if keyIDBytes, exists := uploadEntry.Extended[s3_constants.SeaweedFSSSEKMSKeyID]; exists {
-					keyID := string(keyIDBytes)
+		if uploadEntry != nil && uploadEntry.Extended != nil {
+			// Check if this upload uses SSE-KMS
+			if keyIDBytes, exists := uploadEntry.Extended[s3_constants.SeaweedFSSSEKMSKeyID]; exists {
+				keyID := string(keyIDBytes)
 
-					// Build SSE-KMS metadata for this part
-					bucketKeyEnabled := false
-					if bucketKeyBytes, exists := uploadEntry.Extended[s3_constants.SeaweedFSSSEKMSBucketKeyEnabled]; exists && string(bucketKeyBytes) == "true" {
-						bucketKeyEnabled = true
-					}
+				// Build SSE-KMS metadata for this part
+				bucketKeyEnabled := false
+				if bucketKeyBytes, exists := uploadEntry.Extended[s3_constants.SeaweedFSSSEKMSBucketKeyEnabled]; exists && string(bucketKeyBytes) == "true" {
+					bucketKeyEnabled = true
+				}
 
-					var encryptionContext map[string]string
-					if contextBytes, exists := uploadEntry.Extended[s3_constants.SeaweedFSSSEKMSEncryptionContext]; exists {
-						// Parse the stored encryption context
-						if err := json.Unmarshal(contextBytes, &encryptionContext); err != nil {
-							glog.Errorf("Failed to parse encryption context for upload %s: %v", uploadID, err)
-							encryptionContext = BuildEncryptionContext(bucket, object, bucketKeyEnabled)
-						}
-					} else {
+				var encryptionContext map[string]string
+				if contextBytes, exists := uploadEntry.Extended[s3_constants.SeaweedFSSSEKMSEncryptionContext]; exists {
+					// Parse the stored encryption context
+					if err := json.Unmarshal(contextBytes, &encryptionContext); err != nil {
+						glog.Errorf("Failed to parse encryption context for upload %s: %v", uploadID, err)
 						encryptionContext = BuildEncryptionContext(bucket, object, bucketKeyEnabled)
 					}
-
-					// Get the base IV for this multipart upload
-					var baseIV []byte
-					if baseIVBytes, exists := uploadEntry.Extended[s3_constants.SeaweedFSSSEKMSBaseIV]; exists {
-						// Decode the base64 encoded base IV
-						decodedIV, decodeErr := base64.StdEncoding.DecodeString(string(baseIVBytes))
-						if decodeErr == nil && len(decodedIV) == s3_constants.AESBlockSize {
-							baseIV = decodedIV
-							glog.V(4).Infof("Using stored base IV %x for multipart upload %s", baseIV[:8], uploadID)
-						} else {
-							glog.Errorf("Failed to decode base IV for multipart upload %s: %v (expected %d bytes, got %d)", uploadID, decodeErr, s3_constants.AESBlockSize, len(decodedIV))
-						}
-					}
-
-					// Base IV is required for SSE-KMS multipart uploads - fail if missing or invalid
-					if len(baseIV) == 0 {
-						glog.Errorf("No valid base IV found for SSE-KMS multipart upload %s - cannot proceed with encryption", uploadID)
-						s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
-						return
-					}
-
-					// Add SSE-KMS headers to the request for putToFiler to handle encryption
-					r.Header.Set(s3_constants.AmzServerSideEncryption, "aws:kms")
-					r.Header.Set(s3_constants.AmzServerSideEncryptionAwsKmsKeyId, keyID)
-					if bucketKeyEnabled {
-						r.Header.Set(s3_constants.AmzServerSideEncryptionBucketKeyEnabled, "true")
-					}
-					if len(encryptionContext) > 0 {
-						if contextJSON, err := json.Marshal(encryptionContext); err == nil {
-							r.Header.Set(s3_constants.AmzServerSideEncryptionContext, base64.StdEncoding.EncodeToString(contextJSON))
-						}
-					}
-
-					// Pass the base IV to putToFiler via header
-					r.Header.Set(s3_constants.SeaweedFSSSEKMSBaseIVHeader, base64.StdEncoding.EncodeToString(baseIV))
-
 				} else {
-					// Check if this upload uses SSE-S3
-					if err := s3a.handleSSES3MultipartHeaders(r, uploadEntry, uploadID); err != nil {
-						glog.Errorf("Failed to setup SSE-S3 multipart headers: %v", err)
-						s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
-						return
+					encryptionContext = BuildEncryptionContext(bucket, object, bucketKeyEnabled)
+				}
+
+				// Get the base IV for this multipart upload
+				var baseIV []byte
+				if baseIVBytes, exists := uploadEntry.Extended[s3_constants.SeaweedFSSSEKMSBaseIV]; exists {
+					// Decode the base64 encoded base IV
+					decodedIV, decodeErr := base64.StdEncoding.DecodeString(string(baseIVBytes))
+					if decodeErr == nil && len(decodedIV) == s3_constants.AESBlockSize {
+						baseIV = decodedIV
+						glog.V(4).Infof("Using stored base IV %x for multipart upload %s", baseIV[:8], uploadID)
+					} else {
+						glog.Errorf("Failed to decode base IV for multipart upload %s: %v (expected %d bytes, got %d)", uploadID, decodeErr, s3_constants.AESBlockSize, len(decodedIV))
 					}
 				}
+
+				// Base IV is required for SSE-KMS multipart uploads - fail if missing or invalid
+				if len(baseIV) == 0 {
+					glog.Errorf("No valid base IV found for SSE-KMS multipart upload %s - cannot proceed with encryption", uploadID)
+					s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
+					return
+				}
+
+				// Add SSE-KMS headers to the request for putToFiler to handle encryption
+				r.Header.Set(s3_constants.AmzServerSideEncryption, "aws:kms")
+				r.Header.Set(s3_constants.AmzServerSideEncryptionAwsKmsKeyId, keyID)
+				if bucketKeyEnabled {
+					r.Header.Set(s3_constants.AmzServerSideEncryptionBucketKeyEnabled, "true")
+				}
+				if len(encryptionContext) > 0 {
+					if contextJSON, err := json.Marshal(encryptionContext); err == nil {
+						r.Header.Set(s3_constants.AmzServerSideEncryptionContext, base64.StdEncoding.EncodeToString(contextJSON))
+					}
+				}
+
+				// Pass the base IV to putToFiler via header
+				r.Header.Set(s3_constants.SeaweedFSSSEKMSBaseIVHeader, base64.StdEncoding.EncodeToString(baseIV))
+
+			} else {
+				// Check if this upload uses SSE-S3
+				if err := s3a.handleSSES3MultipartHeaders(r, uploadEntry, uploadID); err != nil {
+					glog.Errorf("Failed to setup SSE-S3 multipart headers: %v", err)
+					s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
+					return
+				}
 			}
-		} else if !errors.Is(err, filer_pb.ErrNotFound) {
-			// Log unexpected errors (but not "not found" which is normal for non-SSE uploads)
-			glog.V(3).Infof("Could not retrieve upload entry for %s/%s: %v (may be non-SSE upload)", bucket, uploadID, err)
+		}
+	}
+
+	// Parts inherit the checksum algorithm declared at CreateMultipartUpload
+	// when the request doesn't specify one; a conflicting one is rejected.
+	if uploadEntry != nil && uploadEntry.Extended != nil {
+		if headerName := string(uploadEntry.Extended[s3_constants.ExtChecksumAlgorithm]); headerName != "" {
+			if algo, reqHeaderName, code := detectRequestedChecksumAlgorithm(r); code == s3err.ErrNone {
+				if algo == ChecksumAlgorithmNone {
+					if name := checksumAlgorithmNameFromHeaderName(headerName); name != "" {
+						r.Header.Set(s3_constants.AmzChecksumAlgorithm, name)
+					}
+				} else if reqHeaderName != headerName {
+					s3err.WriteErrorResponse(w, r, s3err.ErrInvalidRequest)
+					return
+				}
+			}
 		}
 	}
 
@@ -534,6 +564,7 @@ type CompleteMultipartUpload struct {
 type CompletedPart struct {
 	ETag       string
 	PartNumber int
+	ChecksumResult
 }
 
 // handleSSES3MultipartHeaders handles SSE-S3 multipart upload header setup to reduce nesting complexity

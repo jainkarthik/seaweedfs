@@ -95,7 +95,24 @@ func (s3a *S3ApiServer) GetBucketEncryptionHandler(w http.ResponseWriter, r *htt
 	config, errCode := s3a.getEncryptionConfiguration(bucket)
 	if errCode != s3err.ErrNone {
 		if errCode == s3err.ErrNoSuchBucketEncryptionConfiguration {
-			s3err.WriteErrorResponse(w, r, s3err.ErrNoSuchBucketEncryptionConfiguration)
+			// Per AWS S3 spec, all Amazon S3 buckets have default SSE-S3 (AES256) encryption enabled.
+			// Return default AES256 encryption configuration with HTTP 200.
+			bucketKeyEnabled := false
+			defaultResponse := &ServerSideEncryptionConfiguration{
+				Rules: []ServerSideEncryptionRule{
+					{
+						ApplyServerSideEncryptionByDefault: ApplyServerSideEncryptionByDefault{
+							SSEAlgorithm: EncryptionTypeAES256,
+						},
+						BucketKeyEnabled: &bucketKeyEnabled,
+					},
+				},
+			}
+			w.Header().Set("Content-Type", "application/xml")
+			if err := xml.NewEncoder(w).Encode(defaultResponse); err != nil {
+				glog.Errorf("Failed to encode bucket encryption response: %v", err)
+				s3err.WriteErrorResponse(w, r, s3err.ErrInternalError)
+			}
 			return
 		}
 		s3err.WriteErrorResponse(w, r, errCode)
@@ -105,8 +122,17 @@ func (s3a *S3ApiServer) GetBucketEncryptionHandler(w http.ResponseWriter, r *htt
 	// Convert protobuf config to S3 XML response
 	response := encryptionConfigToXML(config)
 	if response == nil {
-		s3err.WriteErrorResponse(w, r, s3err.ErrNoSuchBucketEncryptionConfiguration)
-		return
+		bucketKeyEnabled := false
+		response = &ServerSideEncryptionConfiguration{
+			Rules: []ServerSideEncryptionRule{
+				{
+					ApplyServerSideEncryptionByDefault: ApplyServerSideEncryptionByDefault{
+						SSEAlgorithm: EncryptionTypeAES256,
+					},
+					BucketKeyEnabled: &bucketKeyEnabled,
+				},
+			},
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/xml")
@@ -192,9 +218,17 @@ func (s3a *S3ApiServer) GetBucketEncryptionConfig(bucket string) (*s3_pb.Encrypt
 	config, errCode := s3a.getEncryptionConfiguration(bucket)
 	if errCode != s3err.ErrNone {
 		if errCode == s3err.ErrNoSuchBucketEncryptionConfiguration {
-			return nil, ErrNoEncryptionConfig
+			// Per AWS S3 specification, all S3 buckets default to SSE-S3 (AES256) encryption
+			return &s3_pb.EncryptionConfiguration{
+				SseAlgorithm: EncryptionTypeAES256,
+			}, nil
 		}
 		return nil, fmt.Errorf("failed to get encryption configuration")
+	}
+	if config == nil || config.SseAlgorithm == "" {
+		return &s3_pb.EncryptionConfiguration{
+			SseAlgorithm: EncryptionTypeAES256,
+		}, nil
 	}
 	return config, nil
 }
