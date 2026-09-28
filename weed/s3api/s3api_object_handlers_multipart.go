@@ -315,6 +315,12 @@ func (s3a *S3ApiServer) ListObjectPartsHandler(w http.ResponseWriter, r *http.Re
 func (s3a *S3ApiServer) PutObjectPartHandler(w http.ResponseWriter, r *http.Request) {
 	bucket, object := s3_constants.GetBucketAndObject(r)
 
+	_, err := validateContentMd5(r.Header)
+	if err != nil {
+		s3err.WriteErrorResponse(w, r, s3err.ErrInvalidDigest)
+		return
+	}
+
 	// Check if bucket exists before putting object part
 	if err := s3a.checkBucket(r, bucket); err != s3err.ErrNone {
 		s3err.WriteErrorResponse(w, r, err)
@@ -322,7 +328,7 @@ func (s3a *S3ApiServer) PutObjectPartHandler(w http.ResponseWriter, r *http.Requ
 	}
 
 	uploadID := r.URL.Query().Get("uploadId")
-	err := s3a.checkUploadId(object, uploadID)
+	err = s3a.checkUploadId(object, uploadID)
 	if err != nil {
 		s3err.WriteErrorResponse(w, r, s3err.ErrNoSuchUpload)
 		return

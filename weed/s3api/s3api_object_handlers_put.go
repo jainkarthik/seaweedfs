@@ -1,7 +1,9 @@
 package s3api
 
 import (
+	"bytes"
 	"context"
+	"crypto/md5"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -291,6 +293,9 @@ func (s3a *S3ApiServer) putToFiler(r *http.Request, filePath string, dataReader 
 	// Each part is encrypted independently, then decrypted using metadata during GET
 	partOffset := int64(0)
 
+	plaintextHash := md5.New()
+	dataReader = io.TeeReader(dataReader, plaintextHash)
+
 	// Detect and set up additional checksum computation (S3 checksum algorithm support)
 	checksumAlgo, checksumHeaderName, checksumErrCode := detectRequestedChecksumAlgorithm(r)
 	if checksumErrCode != s3err.ErrNone {
@@ -434,7 +439,21 @@ func (s3a *S3ApiServer) putToFiler(r *http.Request, filePath string, dataReader 
 	}
 
 	// Step 3: Calculate MD5 hash and add SSE metadata to chunks
-	md5Sum := chunkResult.Md5Hash.Sum(nil)
+	md5Sum := plaintextHash.Sum(nil)
+	contentMd5 := r.Header.Get("Content-Md5")
+	if contentMd5 != "" {
+		expectedMd5, err := base64.StdEncoding.DecodeString(contentMd5)
+		if err != nil {
+			glog.Errorf("putToFiler: Invalid Content-Md5 header: %v, attempting to cleanup %d orphaned chunks", err, len(chunkResult.FileChunks))
+			s3a.deleteOrphanedChunks(chunkResult.FileChunks)
+			return "", s3err.ErrInvalidDigest, SSEResponseMetadata{}
+		}
+		if !bytes.Equal(md5Sum, expectedMd5) {
+			glog.Warningf("putToFiler: Checksum verification failed, attempting to cleanup %d orphaned chunks", len(chunkResult.FileChunks))
+			s3a.deleteOrphanedChunks(chunkResult.FileChunks)
+			return "", s3err.ErrBadDigest, SSEResponseMetadata{}
+		}
+	}
 
 	glog.V(4).Infof("putToFiler: Chunked upload SUCCESS - path=%s, chunks=%d, size=%d",
 		filePath, len(chunkResult.FileChunks), chunkResult.TotalSize)
