@@ -1132,12 +1132,14 @@ type ListBucketResult struct {
 }
 
 type ListEntry struct {
-	Key          string         `xml:"Key"`
-	LastModified time.Time      `xml:"LastModified"`
-	ETag         string         `xml:"ETag"`
-	Size         int64          `xml:"Size"`
-	Owner        *CanonicalUser `xml:"Owner,omitempty"`
-	StorageClass StorageClass   `xml:"StorageClass"`
+	ChecksumAlgorithm []string       `xml:"ChecksumAlgorithm,omitempty"`
+	ChecksumType      string         `xml:"ChecksumType,omitempty"`
+	Key               string         `xml:"Key"`
+	LastModified      time.Time      `xml:"LastModified"`
+	ETag              string         `xml:"ETag"`
+	Size              int64          `xml:"Size"`
+	Owner             *CanonicalUser `xml:"Owner,omitempty"`
+	StorageClass      StorageClass   `xml:"StorageClass"`
 }
 
 func (t *ListEntry) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
@@ -1451,14 +1453,16 @@ type User struct {
 }
 
 type VersionEntry struct {
-	Key          string        `xml:"Key"`
-	VersionId    string        `xml:"VersionId"`
-	IsLatest     bool          `xml:"IsLatest"`
-	LastModified time.Time     `xml:"LastModified"`
-	ETag         string        `xml:"ETag"`
-	Size         int64         `xml:"Size"`
-	Owner        CanonicalUser `xml:"Owner,omitempty"`
-	StorageClass StorageClass  `xml:"StorageClass"`
+	ChecksumAlgorithm []string      `xml:"ChecksumAlgorithm,omitempty"`
+	ChecksumType      string        `xml:"ChecksumType,omitempty"`
+	Key               string        `xml:"Key"`
+	VersionId         string        `xml:"VersionId"`
+	IsLatest          bool          `xml:"IsLatest"`
+	LastModified      time.Time     `xml:"LastModified"`
+	ETag              string        `xml:"ETag"`
+	Size              int64         `xml:"Size"`
+	Owner             CanonicalUser `xml:"Owner,omitempty"`
+	StorageClass      StorageClass  `xml:"StorageClass"`
 }
 
 func (t *VersionEntry) MarshalXML(e *xml.Encoder, start xml.StartElement) error {

@@ -484,12 +484,28 @@ func newListEntry(entry *filer_pb.Entry, key string, dir string, name string, bu
 	if etag == "" {
 		etag = "\"" + filer.ETag(entry) + "\""
 	}
+
+	var checksumAlgos []string
+	var checksumType string
+	if entry.Extended != nil {
+		if algoBytes, ok := entry.Extended[s3_constants.ExtChecksumAlgorithm]; ok && len(algoBytes) > 0 {
+			if algoName := parseChecksumAlgorithmName(string(algoBytes)); algoName != "" {
+				checksumAlgos = []string{algoName}
+			}
+		}
+		if typeBytes, ok := entry.Extended[s3_constants.ExtChecksumType]; ok && len(typeBytes) > 0 {
+			checksumType = string(typeBytes)
+		}
+	}
+
 	listEntry = ListEntry{
-		Key:          key,
-		LastModified: time.Unix(entry.Attributes.Mtime, 0).UTC(),
-		ETag:         etag,
-		Size:         int64(filer.FileSize(entry)),
-		StorageClass: StorageClass(storageClass),
+		ChecksumAlgorithm: checksumAlgos,
+		ChecksumType:      checksumType,
+		Key:               key,
+		LastModified:      time.Unix(entry.Attributes.Mtime, 0).UTC(),
+		ETag:              etag,
+		Size:              int64(filer.FileSize(entry)),
+		StorageClass:      StorageClass(storageClass),
 	}
 	if fetchOwner {
 		// Extract owner from S3 metadata (Extended attributes) instead of file system attributes

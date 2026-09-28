@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
+	"github.com/seaweedfs/seaweedfs/weed/s3api/s3_constants"
 	"github.com/seaweedfs/seaweedfs/weed/s3api/s3err"
 	"github.com/stretchr/testify/assert"
 	grpc "google.golang.org/grpc"
@@ -644,4 +645,78 @@ func TestObjectLevelListPermissions(t *testing.T) {
 	t.Log("This test validates the fix for issue #7039")
 	t.Log("Object-level List permissions like 'List:bucket/prefix/*' now work correctly")
 	t.Log("Middleware properly extracts prefix for permission validation")
+}
+
+func TestListEntryChecksumSerialization(t *testing.T) {
+	t.Run("serializes ChecksumAlgorithm and ChecksumType when present", func(t *testing.T) {
+		res := ListBucketResultV2{
+			Name: "test-bucket",
+			Contents: []ListEntry{
+				{
+					Key:               "object1.bin",
+					ETag:              "\"12345\"",
+					ChecksumAlgorithm: []string{"CRC32"},
+					ChecksumType:      "FULL_OBJECT",
+					Size:              100,
+					StorageClass:      "STANDARD",
+				},
+				{
+					Key:          "plain.bin",
+					ETag:         "\"67890\"",
+					Size:         200,
+					StorageClass: "STANDARD",
+				},
+			},
+		}
+
+		data := s3err.EncodeXMLResponse(res)
+		xmlStr := string(data)
+
+		assert.Contains(t, xmlStr, "<ChecksumAlgorithm>CRC32</ChecksumAlgorithm>")
+		assert.Contains(t, xmlStr, "<ChecksumType>FULL_OBJECT</ChecksumType>")
+		// The second entry should not contain empty tags
+		assert.NotContains(t, xmlStr, "<ChecksumAlgorithm></ChecksumAlgorithm>")
+		assert.NotContains(t, xmlStr, "<ChecksumType></ChecksumType>")
+	})
+
+	t.Run("serializes VersionEntry ChecksumAlgorithm and ChecksumType when present", func(t *testing.T) {
+		res := S3ListObjectVersionsResult{
+			Name: "test-bucket",
+			Versions: []VersionEntry{
+				{
+					Key:               "object1.bin",
+					VersionId:         "v1",
+					IsLatest:          true,
+					ETag:              "\"12345\"",
+					ChecksumAlgorithm: []string{"CRC64NVME"},
+					ChecksumType:      "FULL_OBJECT",
+					Size:              100,
+					StorageClass:      "STANDARD",
+				},
+			},
+		}
+
+		data := s3err.EncodeXMLResponse(res)
+		xmlStr := string(data)
+
+		assert.Contains(t, xmlStr, "<ChecksumAlgorithm>CRC64NVME</ChecksumAlgorithm>")
+		assert.Contains(t, xmlStr, "<ChecksumType>FULL_OBJECT</ChecksumType>")
+	})
+
+	t.Run("newListEntry populates checksum fields from entry.Extended", func(t *testing.T) {
+		entry := &filer_pb.Entry{
+			Attributes: &filer_pb.FuseAttributes{
+				FileSize: 1024,
+				Mtime:    time.Now().Unix(),
+			},
+			Extended: map[string][]byte{
+				s3_constants.ExtChecksumAlgorithm: []byte("X-Amz-Checksum-Crc32"),
+				s3_constants.ExtChecksumType:      []byte("FULL_OBJECT"),
+			},
+		}
+
+		listEntry := newListEntry(entry, "my-key", "", "", "", false, false, false, nil)
+		assert.Equal(t, []string{"CRC32"}, listEntry.ChecksumAlgorithm)
+		assert.Equal(t, "FULL_OBJECT", listEntry.ChecksumType)
+	})
 }

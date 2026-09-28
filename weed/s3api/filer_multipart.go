@@ -1253,6 +1253,23 @@ func computeFullObjectChecksum(checksumHeaderName string, partEntries map[int][]
 	return base64.StdEncoding.EncodeToString(out), nil
 }
 
+func parseChecksumAlgorithmName(headerOrAlgo string) string {
+	cleaned := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(headerOrAlgo)), "x-amz-checksum-")
+	switch strings.ToUpper(cleaned) {
+	case "CRC32":
+		return "CRC32"
+	case "CRC32C":
+		return "CRC32C"
+	case "CRC64NVME":
+		return "CRC64NVME"
+	case "SHA1":
+		return "SHA1"
+	case "SHA256":
+		return "SHA256"
+	}
+	return ""
+}
+
 func checksumAlgorithmFromHeaderName(headerName string) ChecksumAlgorithm {
 	for _, entry := range checksumHeaders {
 		if strings.EqualFold(entry.name, headerName) {

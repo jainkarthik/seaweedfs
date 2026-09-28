@@ -581,9 +581,24 @@ func (vc *versionCollector) processRegularFile(currentPath, entryPath string, en
 	}
 	vc.seenVersionIds[versionKey] = true
 
+	var checksumAlgos []string
+	var checksumType string
+	if entry.Extended != nil {
+		if algoBytes, ok := entry.Extended[s3_constants.ExtChecksumAlgorithm]; ok && len(algoBytes) > 0 {
+			if algoName := parseChecksumAlgorithmName(string(algoBytes)); algoName != "" {
+				checksumAlgos = []string{algoName}
+			}
+		}
+		if typeBytes, ok := entry.Extended[s3_constants.ExtChecksumType]; ok && len(typeBytes) > 0 {
+			checksumType = string(typeBytes)
+		}
+	}
+
 	versionEntry := &VersionEntry{
-		Key:          normalizedObjectKey,
-		VersionId:    "null",
+		ChecksumAlgorithm: checksumAlgos,
+		ChecksumType:      checksumType,
+		Key:               normalizedObjectKey,
+		VersionId:         "null",
 		IsLatest:     true,
 		LastModified: time.Unix(entry.Attributes.Mtime, 0),
 		ETag:         vc.s3a.calculateETagFromChunks(entry.Chunks),
