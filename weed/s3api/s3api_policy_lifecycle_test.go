@@ -54,3 +54,20 @@ func TestLifecycleXMLMarshalingWithNamespace(t *testing.T) {
 	assert.True(t, strings.Contains(encoded, `xmlns="http://s3.amazonaws.com/doc/2006-03-01/"`), "Encoded XML must contain canonical S3 namespace: %s", encoded)
 	assert.True(t, strings.Contains(encoded, `<ID>rule-1</ID>`), "Encoded XML must contain rule ID: %s", encoded)
 }
+
+func TestLifecycleXMLFilterPrefixPreservation(t *testing.T) {
+	xmlData := `<LifecycleConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Rule><ID>bryck-compat</ID><Filter><Prefix>compatibility/2026-09-27_233104/</Prefix></Filter><Status>Enabled</Status><Expiration><Days>30</Days></Expiration></Rule></LifecycleConfiguration>`
+
+	var lc Lifecycle
+	err := xml.Unmarshal([]byte(xmlData), &lc)
+	require.NoError(t, err)
+	require.Len(t, lc.Rules, 1)
+	assert.Equal(t, "bryck-compat", lc.Rules[0].ID)
+	assert.Equal(t, Enabled, lc.Rules[0].Status)
+	assert.Equal(t, "compatibility/2026-09-27_233104/", lc.Rules[0].Filter.Prefix.val)
+	assert.Equal(t, 30, lc.Rules[0].Expiration.Days)
+
+	// Verify default transition minimum object size
+	headerVal := normalizeBucketLifecycleTransitionMinimumObjectSize("")
+	assert.Equal(t, "all_storage_classes_128K", headerVal)
+}
