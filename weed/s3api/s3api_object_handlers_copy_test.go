@@ -3,11 +3,13 @@ package s3api
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"reflect"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/seaweedfs/seaweedfs/weed/pb/filer_pb"
 	"github.com/seaweedfs/seaweedfs/weed/s3api/s3_constants"
@@ -739,3 +741,98 @@ func TestClassifyCopySourceLookupError(t *testing.T) {
 		t.Fatalf("expected ErrNone for regular source, got %v", got)
 	}
 }
+
+func TestCopyObjectResultSerialization(t *testing.T) {
+	t.Run("serializes checksum fields when present", func(t *testing.T) {
+		res := CopyObjectResult{
+			ETag:         "\"dc311a9a491138e9d08a49dde9149d1d\"",
+			LastModified: time.Now().UTC(),
+			ChecksumType: "FULL_OBJECT",
+		}
+		res.SetChecksum("x-amz-checksum-crc32", "9CDPXw==")
+
+		data := s3err.EncodeXMLResponse(res)
+		xmlStr := string(data)
+
+		if !strings.Contains(xmlStr, "<ChecksumCRC32>9CDPXw==</ChecksumCRC32>") {
+			t.Errorf("expected XML to contain ChecksumCRC32, got: %s", xmlStr)
+		}
+		if !strings.Contains(xmlStr, "<ChecksumType>FULL_OBJECT</ChecksumType>") {
+			t.Errorf("expected XML to contain ChecksumType, got: %s", xmlStr)
+		}
+		if !strings.Contains(xmlStr, "<ETag>&#34;dc311a9a491138e9d08a49dde9149d1d&#34;</ETag>") && !strings.Contains(xmlStr, "<ETag>\"dc311a9a491138e9d08a49dde9149d1d\"</ETag>") {
+			t.Errorf("expected XML to contain ETag, got: %s", xmlStr)
+		}
+	})
+
+	t.Run("omits checksum fields when empty", func(t *testing.T) {
+		res := CopyObjectResult{
+			ETag:         "\"dc311a9a491138e9d08a49dde9149d1d\"",
+			LastModified: time.Now().UTC(),
+		}
+
+		data := s3err.EncodeXMLResponse(res)
+		xmlStr := string(data)
+
+		if strings.Contains(xmlStr, "Checksum") {
+			t.Errorf("expected XML to omit checksum fields, got: %s", xmlStr)
+		}
+	})
+}
+
+func TestCopyPartResultSerialization(t *testing.T) {
+	res := CopyPartResult{
+		ETag:         "\"434be3943355280edc10633946d454f3\"",
+		LastModified: time.Now().UTC(),
+	}
+	res.SetChecksum("CRC64NVME", "checksum64==")
+
+	data := s3err.EncodeXMLResponse(res)
+	xmlStr := string(data)
+
+	if !strings.Contains(xmlStr, "<ChecksumCRC64NVME>checksum64==</ChecksumCRC64NVME>") {
+		t.Errorf("expected XML to contain ChecksumCRC64NVME, got: %s", xmlStr)
+	}
+}
+
+func TestWriteCopyObjectResponse(t *testing.T) {
+	s3a := &S3ApiServer{}
+
+	entry := &filer_pb.Entry{
+		Extended: map[string][]byte{
+			s3_constants.ExtChecksumAlgorithm: []byte("x-amz-checksum-crc32"),
+			s3_constants.ExtChecksumValue:     []byte("9CDPXw=="),
+			s3_constants.ExtChecksumType:      []byte("FULL_OBJECT"),
+			s3_constants.AmzServerSideEncryption: []byte("AES256"),
+		},
+	}
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("PUT", "/dst-bucket/dst-object", nil)
+	r.Header.Set("X-Amz-Copy-Source", "/src-bucket/src-object")
+
+	tNow := time.Now().UTC()
+	s3a.writeCopyObjectResponse(w, r, "dst-bucket", entry, "\"dc311a9a491138e9d08a49dde9149d1d\"", tNow)
+
+	if w.Header().Get("x-amz-checksum-crc32") != "9CDPXw==" {
+		t.Errorf("expected x-amz-checksum-crc32 header, got %q", w.Header().Get("x-amz-checksum-crc32"))
+	}
+	if w.Header().Get("x-amz-checksum-type") != "FULL_OBJECT" {
+		t.Errorf("expected x-amz-checksum-type header, got %q", w.Header().Get("x-amz-checksum-type"))
+	}
+	if w.Header().Get("x-amz-server-side-encryption") != "AES256" {
+		t.Errorf("expected x-amz-server-side-encryption header, got %q", w.Header().Get("x-amz-server-side-encryption"))
+	}
+	if len(w.Header()["ETag"]) == 0 || w.Header()["ETag"][0] != "\"dc311a9a491138e9d08a49dde9149d1d\"" {
+		t.Errorf("expected ETag header, got %v", w.Header()["ETag"])
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "<ChecksumCRC32>9CDPXw==</ChecksumCRC32>") {
+		t.Errorf("expected body to contain ChecksumCRC32, got %s", body)
+	}
+	if !strings.Contains(body, "<ChecksumType>FULL_OBJECT</ChecksumType>") {
+		t.Errorf("expected body to contain ChecksumType, got %s", body)
+	}
+}
+

@@ -86,10 +86,7 @@ func (s3a *S3ApiServer) CopyObjectHandler(w http.ResponseWriter, r *http.Request
 			s3err.WriteErrorResponse(w, r, s3err.ErrInvalidCopySource)
 			return
 		}
-		writeSuccessResponseXML(w, r, CopyObjectResult{
-			ETag:         filer.ETag(entry),
-			LastModified: t,
-		})
+		s3a.writeCopyObjectResponse(w, r, dstBucket, entry, filer.ETag(entry), t)
 		return
 	}
 
@@ -284,6 +281,21 @@ func (s3a *S3ApiServer) CopyObjectHandler(w http.ResponseWriter, r *http.Request
 	var dstVersionId string
 	var etag string
 
+	if dstEntry.Extended == nil {
+		dstEntry.Extended = make(map[string][]byte)
+	}
+	if _, hasSSE := dstEntry.Extended[s3_constants.AmzServerSideEncryption]; !hasSSE {
+		if enc, err := s3a.GetBucketEncryptionConfig(dstBucket); err == nil && enc != nil && enc.SseAlgorithm != "" {
+			dstEntry.Extended[s3_constants.AmzServerSideEncryption] = []byte(enc.SseAlgorithm)
+			if enc.KmsKeyId != "" {
+				dstEntry.Extended[s3_constants.AmzServerSideEncryptionAwsKmsKeyId] = []byte(enc.KmsKeyId)
+			}
+			if enc.BucketKeyEnabled {
+				dstEntry.Extended[s3_constants.AmzServerSideEncryptionBucketKeyEnabled] = []byte("true")
+			}
+		}
+	}
+
 	if shouldCreateVersionForCopy(dstVersioningState) {
 		// For versioned destination, create a new version using appropriate format
 		dstVersionId = s3a.generateVersionIdForObject(dstBucket, dstObject)
@@ -364,14 +376,7 @@ func (s3a *S3ApiServer) CopyObjectHandler(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	setEtag(w, etag)
-
-	response := CopyObjectResult{
-		ETag:         etag,
-		LastModified: t,
-	}
-
-	writeSuccessResponseXML(w, r, response)
+	s3a.writeCopyObjectResponse(w, r, dstBucket, dstEntry, etag, t)
 
 }
 
@@ -432,9 +437,108 @@ func classifyCopySourceLookupError(err error, entry *filer_pb.Entry) s3err.Error
 	return s3err.ErrInternalError
 }
 
+func (c *CopyObjectResult) SetChecksum(headerOrAlgo, value string) {
+	cleaned := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(headerOrAlgo)), "x-amz-checksum-")
+	switch strings.ToUpper(cleaned) {
+	case "CRC32":
+		c.ChecksumCRC32 = value
+	case "CRC32C":
+		c.ChecksumCRC32C = value
+	case "CRC64NVME":
+		c.ChecksumCRC64NVME = value
+	case "SHA1":
+		c.ChecksumSHA1 = value
+	case "SHA256":
+		c.ChecksumSHA256 = value
+	}
+}
+
 type CopyPartResult struct {
-	LastModified time.Time `xml:"LastModified"`
-	ETag         string    `xml:"ETag"`
+	LastModified      time.Time `xml:"LastModified"`
+	ETag              string    `xml:"ETag"`
+	ChecksumCRC32     string    `xml:"ChecksumCRC32,omitempty"`
+	ChecksumCRC32C    string    `xml:"ChecksumCRC32C,omitempty"`
+	ChecksumCRC64NVME string    `xml:"ChecksumCRC64NVME,omitempty"`
+	ChecksumSHA1      string    `xml:"ChecksumSHA1,omitempty"`
+	ChecksumSHA256    string    `xml:"ChecksumSHA256,omitempty"`
+}
+
+func (c *CopyPartResult) SetChecksum(headerOrAlgo, value string) {
+	cleaned := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(headerOrAlgo)), "x-amz-checksum-")
+	switch strings.ToUpper(cleaned) {
+	case "CRC32":
+		c.ChecksumCRC32 = value
+	case "CRC32C":
+		c.ChecksumCRC32C = value
+	case "CRC64NVME":
+		c.ChecksumCRC64NVME = value
+	case "SHA1":
+		c.ChecksumSHA1 = value
+	case "SHA256":
+		c.ChecksumSHA256 = value
+	}
+}
+
+func (s3a *S3ApiServer) writeCopyObjectResponse(w http.ResponseWriter, r *http.Request, dstBucket string, entry *filer_pb.Entry, etag string, modifiedTime time.Time) {
+	setEtag(w, etag)
+
+	response := CopyObjectResult{
+		ETag:         etag,
+		LastModified: modifiedTime,
+	}
+
+	if entry != nil && entry.Extended != nil {
+		algo := string(entry.Extended[s3_constants.ExtChecksumAlgorithm])
+		val := string(entry.Extended[s3_constants.ExtChecksumValue])
+		cType := string(entry.Extended[s3_constants.ExtChecksumType])
+
+		if algo != "" && val != "" {
+			headerName := algo
+			if !strings.HasPrefix(strings.ToLower(headerName), "x-amz-checksum-") {
+				headerName = "x-amz-checksum-" + strings.ToLower(headerName)
+			}
+			w.Header().Set(headerName, val)
+			if cType != "" {
+				w.Header().Set(s3_constants.AmzChecksumType, cType)
+				response.ChecksumType = cType
+			}
+			response.SetChecksum(algo, val)
+		}
+
+		if sse := string(entry.Extended[s3_constants.AmzServerSideEncryption]); sse != "" {
+			w.Header().Set(s3_constants.AmzServerSideEncryption, sse)
+			if sse == "aws:kms" {
+				if kmsKeyID := string(entry.Extended[s3_constants.AmzServerSideEncryptionAwsKmsKeyId]); kmsKeyID != "" {
+					w.Header().Set(s3_constants.AmzServerSideEncryptionAwsKmsKeyId, kmsKeyID)
+				}
+				if bucketKey := string(entry.Extended[s3_constants.AmzServerSideEncryptionBucketKeyEnabled]); bucketKey != "" {
+					w.Header().Set(s3_constants.AmzServerSideEncryptionBucketKeyEnabled, bucketKey)
+				}
+			}
+		} else {
+			if enc, err := s3a.GetBucketEncryptionConfig(dstBucket); err == nil && enc != nil && enc.SseAlgorithm != "" {
+				w.Header().Set(s3_constants.AmzServerSideEncryption, enc.SseAlgorithm)
+				if enc.KmsKeyId != "" {
+					w.Header().Set(s3_constants.AmzServerSideEncryptionAwsKmsKeyId, enc.KmsKeyId)
+				}
+				if enc.BucketKeyEnabled {
+					w.Header().Set(s3_constants.AmzServerSideEncryptionBucketKeyEnabled, "true")
+				}
+			}
+		}
+	} else {
+		if enc, err := s3a.GetBucketEncryptionConfig(dstBucket); err == nil && enc != nil && enc.SseAlgorithm != "" {
+			w.Header().Set(s3_constants.AmzServerSideEncryption, enc.SseAlgorithm)
+			if enc.KmsKeyId != "" {
+				w.Header().Set(s3_constants.AmzServerSideEncryptionAwsKmsKeyId, enc.KmsKeyId)
+			}
+			if enc.BucketKeyEnabled {
+				w.Header().Set(s3_constants.AmzServerSideEncryptionBucketKeyEnabled, "true")
+			}
+		}
+	}
+
+	writeSuccessResponseXML(w, r, response)
 }
 
 func (s3a *S3ApiServer) CopyObjectPartHandler(w http.ResponseWriter, r *http.Request) {
@@ -642,6 +746,21 @@ func (s3a *S3ApiServer) CopyObjectPartHandler(w http.ResponseWriter, r *http.Req
 	response := CopyPartResult{
 		ETag:         etag,
 		LastModified: t,
+	}
+
+	if dstEntry != nil && dstEntry.Extended != nil {
+		algo := string(dstEntry.Extended[s3_constants.ExtChecksumAlgorithm])
+		val := string(dstEntry.Extended[s3_constants.ExtChecksumValue])
+		if algo != "" && val != "" {
+			response.SetChecksum(algo, val)
+		}
+		if sse := string(dstEntry.Extended[s3_constants.AmzServerSideEncryption]); sse != "" {
+			w.Header().Set(s3_constants.AmzServerSideEncryption, sse)
+		} else if enc, err := s3a.GetBucketEncryptionConfig(dstBucket); err == nil && enc != nil && enc.SseAlgorithm != "" {
+			w.Header().Set(s3_constants.AmzServerSideEncryption, enc.SseAlgorithm)
+		}
+	} else if enc, err := s3a.GetBucketEncryptionConfig(dstBucket); err == nil && enc != nil && enc.SseAlgorithm != "" {
+		w.Header().Set(s3_constants.AmzServerSideEncryption, enc.SseAlgorithm)
 	}
 
 	writeSuccessResponseXML(w, r, response)

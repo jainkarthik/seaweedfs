@@ -619,8 +619,14 @@ type CopyObjectResponse struct {
 }
 
 type CopyObjectResult struct {
-	LastModified time.Time `xml:"LastModified"`
-	ETag         string    `xml:"ETag"`
+	LastModified      time.Time `xml:"LastModified"`
+	ETag              string    `xml:"ETag"`
+	ChecksumCRC32     string    `xml:"ChecksumCRC32,omitempty"`
+	ChecksumCRC32C    string    `xml:"ChecksumCRC32C,omitempty"`
+	ChecksumCRC64NVME string    `xml:"ChecksumCRC64NVME,omitempty"`
+	ChecksumSHA1      string    `xml:"ChecksumSHA1,omitempty"`
+	ChecksumSHA256    string    `xml:"ChecksumSHA256,omitempty"`
+	ChecksumType      string    `xml:"ChecksumType,omitempty"`
 }
 
 func (t *CopyObjectResult) MarshalXML(e *xml.Encoder, start xml.StartElement) error {
